@@ -342,7 +342,7 @@ ipcMain.handle("open-code-server", async (_, { device, folder }) => {
     title: "VS Code — " + (device || "local"),
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
-    webPreferences: { nodeIntegration: false, contextIsolation: true },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
   });
   win.loadURL(codeUrl);
   trackIndependentWindow(win);
