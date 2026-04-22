@@ -688,29 +688,24 @@ app.on("ready", () => {
       }
     });
 
+    // Remove ALL existing blur listeners (menubar adds one that calls hide)
+    mb.window.removeAllListeners("blur");
+
+    // Re-add our own blur handler: only hide if NOT pinned
+    mb.window.on("blur", () => {
+      if (isPinned) return; // do nothing — window stays
+      mb.hideWindow();
+    });
+
     // When window is hidden, reset pin state
     mb.window.on("hide", () => {
-      // If somehow hidden while pinned (shouldn't happen due to patch), just reset
       if (isPinned) {
         isPinned = false;
         sendToRenderer("pinned-changed", { pinned: false });
       }
     });
 
-    // Prevent blur-triggered hide when pinned
-    // menubar listens to blur and calls hide — we can't prevent that listener
-    // so instead we re-show after a tiny delay if still pinned
-    mb.window.on("blur", () => {
-      if (isPinned) {
-        setTimeout(() => {
-          if (isPinned && mb.window && !mb.window.isVisible()) {
-            mb.window.showInactive(); // show without stealing focus
-          }
-        }, 50);
-      }
-    });
-
-    // Monkey-patch window.hide to prevent menubar from hiding pinned window
+    // Monkey-patch window.hide as extra safety
     const origHide = mb.window.hide.bind(mb.window);
     mb.window.hide = () => {
       if (isPinned) return;
