@@ -254,7 +254,8 @@ ipcMain.handle("toggle-connection", () => {
 
 ipcMain.handle("close-window", () => {
   if (mb?.window) {
-    isPinned = false; // Must reset BEFORE hide, since hide is patched to check isPinned
+    isPinned = false;
+    mb._pinned = false;
     sendToRenderer("pinned-changed", { pinned: false });
     mb.window.hide();
   }
@@ -682,7 +683,8 @@ app.on("ready", () => {
       const dy = Math.abs(winBounds.y - (trayBounds.y + trayBounds.height));
       if (dx > 50 || dy > 50) {
         isPinned = true;
-        mb.window.setAlwaysOnTop(false); // normal window behavior
+        mb._pinned = true; // patch menubar internals
+        mb.window.setAlwaysOnTop(false);
         mb.window.setVisibleOnAllWorkspaces(false);
         sendToRenderer("pinned-changed", { pinned: true });
       }
