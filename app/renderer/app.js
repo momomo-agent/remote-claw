@@ -241,13 +241,15 @@ function openShellSession() {
   xterm.clear();
   xterm.writeln("\x1b[90mConnecting to " + state.selectedDevice + "...\x1b[0m");
   api.invoke("shell-open", { device: state.selectedDevice, sessionId: state.shellSessionId, cols: xterm.cols, rows: xterm.rows });
-  // Mark as open after a short delay (data arriving confirms it)
+  // Timeout — if no data received in 5s, show error
   shellConnectTimeout = setTimeout(() => {
     if (state.shellStatus === "connecting") {
-      state.shellStatus = "open";
+      state.shellStatus = "error";
+      xterm.writeln("\x1b[31mConnection timed out. Device may not support shell or is offline.\x1b[0m");
+      xterm.writeln("\x1b[90mTry selecting a different device or click Reconnect.\x1b[0m");
       updateShellStatus();
     }
-  }, 1000);
+  }, 5000);
 }
 let shellConnectTimeout = null;
 

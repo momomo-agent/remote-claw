@@ -698,8 +698,16 @@ app.on("ready", () => {
     });
 
     // Prevent blur-triggered hide when pinned
+    // menubar listens to blur and calls hide — we can't prevent that listener
+    // so instead we re-show after a tiny delay if still pinned
     mb.window.on("blur", () => {
-      if (isPinned) return;
+      if (isPinned) {
+        setTimeout(() => {
+          if (isPinned && mb.window && !mb.window.isVisible()) {
+            mb.window.showInactive(); // show without stealing focus
+          }
+        }, 50);
+      }
     });
 
     // Monkey-patch window.hide to prevent menubar from hiding pinned window
