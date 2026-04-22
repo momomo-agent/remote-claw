@@ -43,6 +43,25 @@ async function loadLogic() {
   // Priority: cached (latest from GitHub) > bundled
   const logicPath = fs.existsSync(CACHED_LOGIC) ? CACHED_LOGIC : LOCAL_LOGIC;
   console.log("[bootstrap] Loading:", logicPath);
+
+  // Ensure cached logic can find node_modules from app directory
+  if (logicPath !== LOCAL_LOGIC) {
+    const Module = require("module");
+    const appNodeModules = path.join(__dirname, "node_modules");
+    const origResolve = Module._resolveFilename;
+    Module._resolveFilename = function(request, parent, ...args) {
+      try { return origResolve.call(this, request, parent, ...args); }
+      catch (e) {
+        // Retry with app's node_modules
+        const altPath = path.join(appNodeModules, request);
+        if (fs.existsSync(altPath) || fs.existsSync(altPath + '.js') || fs.existsSync(path.join(altPath, 'index.js'))) {
+          return origResolve.call(this, altPath, parent, ...args);
+        }
+        throw e;
+      }
+    };
+  }
+
   require(logicPath);
 }
 

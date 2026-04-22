@@ -9,10 +9,13 @@ const WebSocket = require("ws");
 const fs = require("fs");
 const os = require("os");
 
+// App directory — always the real app location, even when loaded from cache
+const APP_DIR = path.dirname(require.main?.filename || __dirname);
+
 // ── Auto-install rclaw CLI ──
 
 function installCLI() {
-  const cliSrc = path.join(__dirname, "..", "cli", "rclaw.js");
+  const cliSrc = path.join(APP_DIR, "..", "cli", "rclaw.js");
   const cliDst = "/usr/local/bin/rclaw";
   try {
     try { fs.unlinkSync(cliDst); } catch {}
@@ -285,7 +288,7 @@ ipcMain.handle("eval", async (_, { code }) => {
 // ── Menubar setup ──
 
 const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
-const LOCAL_URL = `file://${path.join(__dirname, "renderer", "index.html")}`;
+const LOCAL_URL = `file://${path.join(APP_DIR, "renderer", "index.html")}`;
 
 installCLI();
 
@@ -295,7 +298,7 @@ mb = menubar({
   preloadWindow: true,
   browserWindow: {
     width: 420, height: 560, minWidth: 320, minHeight: 400,
-    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(__dirname, "preload.js") },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
     resizable: true, skipTaskbar: true,
   },
   showDockIcon: false,
