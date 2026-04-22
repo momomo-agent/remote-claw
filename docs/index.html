@@ -252,6 +252,13 @@ body {
 .empty-icon { font-size: 32px; opacity: 0.5; }
 .empty-text { font-size: 13px; }
 
+/* ── Detached window ── */
+.detached-titlebar {
+  display: flex; align-items: center; padding: 10px 16px;
+  -webkit-app-region: drag; gap: 8px;
+}
+.detached-titlebar select { -webkit-app-region: no-drag; }
+
 /* ── Loading ── */
 .loading { text-align: center; padding: 20px; color: var(--text-tertiary); font-size: 12px; }
 </style>

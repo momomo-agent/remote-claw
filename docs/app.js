@@ -1,13 +1,19 @@
 // RemoteClaw Renderer — Apple-style UI
 const api = window.electronAPI;
 
+// Detect detached window mode from URL params
+const urlParams = new URLSearchParams(window.location.search);
+const isDetached = urlParams.get('detached') === '1';
+const detachedTab = urlParams.get('tab');
+const detachedDevice = urlParams.get('device');
+
 let state = {
-  tab: "shell",
+  tab: detachedTab || "shell",
   connected: false,
   serverUrl: "",
   devices: [],
   history: [],
-  selectedDevice: "",
+  selectedDevice: detachedDevice || "",
   cmdText: "",
   executing: false,
   terminalLines: [],
@@ -60,28 +66,42 @@ function render() {
     : state.tab === "files" ? renderFiles()
     : renderShell();
 
-  app.innerHTML = `
-    <div class="titlebar">
-      <div class="titlebar-left">
-        <div class="status-indicator ${state.connected ? 'on' : 'off'}" id="conn-toggle" title="${state.connected ? 'Connected' : 'Disconnected'}"></div>
-        <span class="titlebar-title">RemoteClaw</span>
-      </div>
-      <div class="titlebar-right">
-        <select class="device-select" id="global-device">
+  if (isDetached) {
+    app.innerHTML = `
+      <div class="detached-titlebar">
+        <select class="device-select" id="global-device" style="margin-left:72px">
           <option value="">No device</option>
           ${state.devices.map(d => `<option value="${esc(d.id)}" ${d.id === state.selectedDevice ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}
         </select>
-        ${state.pinned ? '<button class="pin-close" id="pin-close" title="Close">✕</button>' : ''}
+        <span style="flex:1"></span>
+        <span style="font-size:12px;color:var(--text-secondary)">${state.tab.charAt(0).toUpperCase() + state.tab.slice(1)}</span>
       </div>
-    </div>
-    <div class="tabbar">
-      ${['shell','terminal','files','devices','history','settings'].map(t => {
-        const label = t === 'terminal' ? 'Exec' : t === 'settings' ? '⚙' : t.charAt(0).toUpperCase() + t.slice(1);
-        return `<div class="tabbar-item ${state.tab === t ? 'active' : ''}" data-tab="${t}">${label}</div>`;
-      }).join('')}
-    </div>
-    <div class="content" id="content-area">${content}</div>
-  `;
+      <div class="content" id="content-area" style="height:calc(100vh - 40px)">${content}</div>
+    `;
+  } else {
+    app.innerHTML = `
+      <div class="titlebar">
+        <div class="titlebar-left">
+          <div class="status-indicator ${state.connected ? 'on' : 'off'}" id="conn-toggle" title="${state.connected ? 'Connected' : 'Disconnected'}"></div>
+          <span class="titlebar-title">RemoteClaw</span>
+        </div>
+        <div class="titlebar-right">
+          <select class="device-select" id="global-device">
+            <option value="">No device</option>
+            ${state.devices.map(d => `<option value="${esc(d.id)}" ${d.id === state.selectedDevice ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}
+          </select>
+          ${state.pinned ? '<button class="pin-close" id="pin-close" title="Close">✕</button>' : ''}
+        </div>
+      </div>
+      <div class="tabbar">
+        ${['shell','terminal','files','devices','history','settings'].map(t => {
+          const label = t === 'terminal' ? 'Exec' : t === 'settings' ? '⚙' : t.charAt(0).toUpperCase() + t.slice(1);
+          return `<div class="tabbar-item ${state.tab === t ? 'active' : ''}" data-tab="${t}">${label}</div>`;
+        }).join('')}
+      </div>
+      <div class="content" id="content-area">${content}</div>
+    `;
+  }
   bindEvents();
   if (state.tab === 'shell') initShellTab();
 }
@@ -386,11 +406,18 @@ let cmdHistory = [];
 let cmdHistoryIdx = -1;
 
 function bindEvents() {
+  // Tab click + double-click to detach
   document.querySelectorAll('.tabbar-item').forEach(el => {
     el.addEventListener('click', () => {
       state.tab = el.dataset.tab;
       render();
       if (state.tab === 'files' && !state.filesEntries.length && !state.filesLoading) loadFiles(state.filesPath);
+    });
+    el.addEventListener('dblclick', () => {
+      const tab = el.dataset.tab;
+      if (['shell', 'terminal', 'files'].includes(tab)) {
+        api.invoke('open-tab-window', { tab, device: state.selectedDevice, title: `RemoteClaw \u2014 ${tab.charAt(0).toUpperCase() + tab.slice(1)}` });
+      }
     });
   });
 
@@ -562,6 +589,20 @@ api.on('shell-exit', (msg) => {
 });
 
 // ── Init ──
+
+// Global keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  // Cmd+K: clear shell or terminal
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault();
+    if (state.tab === 'shell' && xterm) {
+      xterm.clear();
+    } else if (state.tab === 'terminal') {
+      state.terminalLines = [];
+      render();
+    }
+  }
+});
 
 (async () => {
   const pinnedState = await api.getPinned();

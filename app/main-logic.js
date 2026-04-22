@@ -234,6 +234,38 @@ ipcMain.handle("win-set-title", (_, { title }) => { if (mb?.window) mb.window.se
 ipcMain.handle("win-set-opacity", (_, { opacity }) => { if (mb?.window) mb.window.setOpacity(opacity); });
 ipcMain.handle("win-open-devtools", () => { if (mb?.window) mb.window.webContents.openDevTools({ mode: "detach" }); });
 
+// ── IPC: Detach tab into independent window ──
+
+const detachedWindows = new Map();
+
+ipcMain.handle("open-tab-window", (_, { tab, device, title }) => {
+  const { BrowserWindow } = require("electron");
+  const existing = detachedWindows.get(tab);
+  if (existing && !existing.isDestroyed()) { existing.focus(); return { ok: true, reused: true }; }
+
+  const sizes = { shell: [720, 500], files: [680, 520], terminal: [720, 480] };
+  const [w, h] = sizes[tab] || [680, 500];
+
+  const win = new BrowserWindow({
+    width: w, height: h, minWidth: 400, minHeight: 300,
+    title: title || `RemoteClaw — ${tab}`,
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 12, y: 12 },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
+  });
+
+  const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
+  const url = new URL(CLOUD_URL);
+  url.searchParams.set("tab", tab);
+  url.searchParams.set("device", device || "");
+  url.searchParams.set("detached", "1");
+  win.loadURL(url.toString());
+
+  detachedWindows.set(tab, win);
+  win.on("closed", () => detachedWindows.delete(tab));
+  return { ok: true };
+});
+
 // ── IPC: Filesystem ──
 
 ipcMain.handle("read-file", async (_, p) => { try { return { data: fs.readFileSync(p, "utf-8") }; } catch (e) { return { error: e.message }; } });
