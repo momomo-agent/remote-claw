@@ -201,9 +201,9 @@ function initShellTab() {
   if (shellResizeObserver) { shellResizeObserver.disconnect(); shellResizeObserver = null; }
 
   xterm = new Terminal({
-    cursorBlink: true, fontSize: 12,
-    fontFamily: '"SF Mono", Menlo, Monaco, "Courier New", monospace',
-    theme: { background: '#1c1c1e', foreground: '#f5f5f7', cursor: '#0a84ff', selectionBackground: '#0a84ff44' },
+    cursorBlink: true, fontSize: 13,
+    fontFamily: '"Geist Mono", "SF Mono", Menlo, Monaco, monospace',
+    theme: { background: '#161618', foreground: '#ececf0', cursor: '#3b82f6', selectionBackground: 'rgba(59,130,246,0.2)', black: '#161618', brightBlack: '#56565a' },
     allowProposedApi: true,
   });
   xtermFit = new FitAddon.FitAddon();
