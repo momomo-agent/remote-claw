@@ -67,6 +67,7 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 16px 6px;
   -webkit-app-region: drag;
+  position: sticky; top: 0; z-index: 10; background: var(--bg);
 }
 .titlebar-left { display: flex; align-items: center; gap: 10px; }
 .status-indicator {
@@ -103,6 +104,7 @@ body {
 .tabbar {
   display: flex; gap: 1px; padding: 4px 12px 10px;
   -webkit-app-region: no-drag;
+  position: sticky; top: 44px; z-index: 10; background: var(--bg);
 }
 .tabbar-item {
   padding: 5px 14px; border-radius: var(--radius-xs);

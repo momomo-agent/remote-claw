@@ -92,8 +92,8 @@ function render() {
         </div>
       </div>
       <div class="tabbar">
-        ${['shell','terminal','files','devices','history','settings'].map(t => {
-          const label = t === 'terminal' ? 'Exec' : t === 'settings' ? '⚙' : t.charAt(0).toUpperCase() + t.slice(1);
+        ${['shell','files','devices','history','settings'].map(t => {
+          const label = t === 'settings' ? '⚙' : t.charAt(0).toUpperCase() + t.slice(1);
           return `<div class="tabbar-item ${state.tab === t ? 'active' : ''}" data-tab="${t}">${label}</div>`;
         }).join('')}
       </div>
@@ -633,5 +633,14 @@ document.addEventListener('keydown', (e) => {
   state.pinned = pinnedState?.pinned || false;
   await refreshData();
   render();
-  setInterval(async () => { await refreshData(); render(); }, 5000);
+  setInterval(async () => {
+    await refreshData();
+    // Don't re-render files/shell tabs (loses scroll position / xterm state)
+    if (state.tab !== 'files' && state.tab !== 'shell') render();
+    else {
+      // Just update connection indicator
+      const ind = document.getElementById('conn-toggle');
+      if (ind) ind.className = `status-indicator ${state.connected ? 'on' : 'off'}`;
+    }
+  }, 5000);
 })();

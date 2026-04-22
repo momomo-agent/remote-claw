@@ -162,9 +162,14 @@ body { font-family: var(--font); background: var(--bg); color: var(--text-primar
     </div>
   </div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script>
+// Save xterm refs before Monaco's AMD loader hijacks define
+window._Terminal = Terminal;
+window._FitAddon = FitAddon;
+</script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
 <script src="editor.js"></script>
 </body>
 </html>

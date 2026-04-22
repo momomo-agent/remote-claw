@@ -186,13 +186,15 @@ async function saveFile() {
 // ── Terminal ──
 function initTerminal() {
   const container = document.getElementById('editor-xterm');
-  termXterm = new Terminal({
+  const XTerminal = window._Terminal || window.Terminal;
+  const XFitAddon = window._FitAddon || window.FitAddon;
+  termXterm = new XTerminal({
     cursorBlink: true, fontSize: 12,
     fontFamily: '"Geist Mono", "SF Mono", Menlo, monospace',
     theme: { background: '#161618', foreground: '#ececf0', cursor: '#3b82f6', selectionBackground: 'rgba(59,130,246,0.2)' },
     allowProposedApi: true,
   });
-  termFit = new FitAddon.FitAddon();
+  termFit = new XFitAddon.FitAddon();
   termXterm.loadAddon(termFit);
   termXterm.open(container);
   termFit.fit();
