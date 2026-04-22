@@ -237,6 +237,18 @@ ipcMain.handle("win-open-devtools", () => { if (mb?.window) mb.window.webContent
 // ── IPC: Detach tab into independent window ──
 
 const detachedWindows = new Map();
+const allIndependentWindows = new Set();
+
+function trackIndependentWindow(win) {
+  allIndependentWindows.add(win);
+  // Show dock when first independent window opens
+  if (allIndependentWindows.size === 1 && app.dock) app.dock.show();
+  win.on("closed", () => {
+    allIndependentWindows.delete(win);
+    // Hide dock when all independent windows closed
+    if (allIndependentWindows.size === 0 && app.dock) app.dock.hide();
+  });
+}
 
 ipcMain.handle("open-tab-window", (_, { tab, device, title }) => {
   const { BrowserWindow } = require("electron");
@@ -262,6 +274,7 @@ ipcMain.handle("open-tab-window", (_, { tab, device, title }) => {
   win.loadURL(url.toString());
 
   detachedWindows.set(tab, win);
+  trackIndependentWindow(win);
   win.on("closed", () => detachedWindows.delete(tab));
   return { ok: true };
 });
@@ -280,6 +293,7 @@ ipcMain.handle("open-preview", (_, { file, device, title }) => {
   url.searchParams.set("file", file);
   url.searchParams.set("device", device || "");
   win.loadURL(url.toString());
+  trackIndependentWindow(win);
   return { ok: true };
 });
 
@@ -298,6 +312,7 @@ ipcMain.handle("open-editor", (_, { dir, file, device, title }) => {
   if (file) url.searchParams.set("file", file);
   if (device) url.searchParams.set("device", device);
   win.loadURL(url.toString());
+  trackIndependentWindow(win);
   return { ok: true };
 });
 
@@ -330,6 +345,7 @@ ipcMain.handle("open-code-server", async (_, { device, folder }) => {
     webPreferences: { nodeIntegration: false, contextIsolation: true },
   });
   win.loadURL(codeUrl);
+  trackIndependentWindow(win);
   return { ok: true };
 });
 
