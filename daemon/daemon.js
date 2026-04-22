@@ -6,6 +6,8 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const WebSocket = require("ws");
+let pty;
+try { pty = require("node-pty"); } catch { pty = null; }
 
 // ── Config ──
 
@@ -69,6 +71,11 @@ function connect() {
       if (msg.type === "file-start") handleIncomingFileStart(msg);
       if (msg.type === "file-chunk") handleIncomingFileChunk(msg);
       if (msg.type === "file-end") handleIncomingFileEnd(msg);
+      // Shell session messages
+      if (msg.type === "shell-open") handleShellOpen(msg);
+      if (msg.type === "shell-input") handleShellInput(msg);
+      if (msg.type === "shell-resize") handleShellResize(msg);
+      if (msg.type === "shell-close") handleShellClose(msg);
     } catch (e) {
       console.error("Bad message:", e.message);
     }
@@ -130,6 +137,81 @@ function execCommand(taskId, command) {
       ws.send(JSON.stringify({ type: "result", taskId, stdout: "", stderr: e.message, exitCode: 1 }));
     }
   });
+}
+
+// ── Shell Sessions (PTY) ──
+
+const MAX_SHELL_SESSIONS = 5;
+const SHELL_IDLE_TIMEOUT = 30 * 60 * 1000; // 30 min
+const shellSessions = new Map(); // sessionId -> { pty, from, idleTimer }
+
+function handleShellOpen(msg) {
+  if (!pty) {
+    wsSend({ type: "shell-exit", sessionId: msg.sessionId, exitCode: -1, error: "node-pty not available", to: msg.from });
+    return;
+  }
+  if (shellSessions.size >= MAX_SHELL_SESSIONS) {
+    wsSend({ type: "shell-exit", sessionId: msg.sessionId, exitCode: -1, error: "max sessions reached", to: msg.from });
+    return;
+  }
+  console.log(`[shell] open: ${msg.sessionId} for ${msg.from}`);
+  const shell = process.env.SHELL || "/bin/zsh";
+  const term = pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cols: msg.cols || 80,
+    rows: msg.rows || 24,
+    cwd: os.homedir(),
+    env: { ...process.env, HOME: os.homedir(), PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}` },
+  });
+  const session = { pty: term, from: msg.from, idleTimer: null };
+  resetShellIdle(msg.sessionId, session);
+  shellSessions.set(msg.sessionId, session);
+
+  term.onData((data) => {
+    wsSend({ type: "shell-data", sessionId: msg.sessionId, data: Buffer.from(data).toString("base64"), to: session.from });
+  });
+  term.onExit(({ exitCode }) => {
+    console.log(`[shell] exit: ${msg.sessionId} code=${exitCode}`);
+    wsSend({ type: "shell-exit", sessionId: msg.sessionId, exitCode, to: session.from });
+    clearTimeout(session.idleTimer);
+    shellSessions.delete(msg.sessionId);
+  });
+}
+
+function handleShellInput(msg) {
+  const session = shellSessions.get(msg.sessionId);
+  if (!session) return;
+  resetShellIdle(msg.sessionId, session);
+  session.pty.write(Buffer.from(msg.data, "base64").toString());
+}
+
+function handleShellResize(msg) {
+  const session = shellSessions.get(msg.sessionId);
+  if (!session) return;
+  session.pty.resize(msg.cols, msg.rows);
+}
+
+function handleShellClose(msg) {
+  const session = shellSessions.get(msg.sessionId);
+  if (!session) return;
+  console.log(`[shell] close: ${msg.sessionId}`);
+  clearTimeout(session.idleTimer);
+  session.pty.kill();
+  shellSessions.delete(msg.sessionId);
+}
+
+function resetShellIdle(sessionId, session) {
+  clearTimeout(session.idleTimer);
+  session.idleTimer = setTimeout(() => {
+    console.log(`[shell] idle timeout: ${sessionId}`);
+    session.pty.kill();
+    wsSend({ type: "shell-exit", sessionId, exitCode: -1, error: "idle timeout", to: session.from });
+    shellSessions.delete(sessionId);
+  }, SHELL_IDLE_TIMEOUT);
+}
+
+function wsSend(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
 // ── Keepalive ──

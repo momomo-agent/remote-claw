@@ -10,8 +10,9 @@
     "build": "electron-builder --mac"
   },
   "dependencies": {
-    "menubar": "^9.5.0",
     "electron-store": "^8.2.0",
+    "menubar": "^9.5.0",
+    "node-pty": "^1.1.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

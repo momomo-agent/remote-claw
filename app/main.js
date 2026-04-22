@@ -107,6 +107,10 @@ function connectDaemon() {
           }
         });
       }
+      // Forward shell messages from daemon to renderer
+      if (msg.type === "shell-data" || msg.type === "shell-exit") {
+        sendToRenderer(msg.type, msg);
+      }
     } catch {}
   });
 
@@ -185,6 +189,40 @@ ipcMain.handle("exec-command", async (_, { device, command }) => {
     });
     return await res.json();
   } catch (e) { return { error: e.message }; }
+});
+
+// ── Shell session IPC (PTY over WS) ──
+
+ipcMain.handle("shell-open", (_, { device, sessionId, cols, rows }) => {
+  if (daemonWs?.readyState === WebSocket.OPEN) {
+    daemonWs.send(JSON.stringify({ type: "shell-open", sessionId, to: device, cols, rows }));
+    return { ok: true };
+  }
+  return { error: "not connected" };
+});
+
+ipcMain.handle("shell-input", (_, { sessionId, data, device }) => {
+  if (daemonWs?.readyState === WebSocket.OPEN) {
+    daemonWs.send(JSON.stringify({ type: "shell-input", sessionId, data, to: device }));
+    return { ok: true };
+  }
+  return { error: "not connected" };
+});
+
+ipcMain.handle("shell-resize", (_, { sessionId, cols, rows, device }) => {
+  if (daemonWs?.readyState === WebSocket.OPEN) {
+    daemonWs.send(JSON.stringify({ type: "shell-resize", sessionId, cols, rows, to: device }));
+    return { ok: true };
+  }
+  return { error: "not connected" };
+});
+
+ipcMain.handle("shell-close", (_, { sessionId, device }) => {
+  if (daemonWs?.readyState === WebSocket.OPEN) {
+    daemonWs.send(JSON.stringify({ type: "shell-close", sessionId, to: device }));
+    return { ok: true };
+  }
+  return { error: "not connected" };
 });
 
 ipcMain.handle("save-config", async (_, newCfg) => {

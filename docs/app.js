@@ -2,7 +2,7 @@
 const api = window.electronAPI;
 
 let state = {
-  tab: "terminal",
+  tab: "shell",
   connected: false,
   serverUrl: "",
   devices: [],
@@ -14,6 +14,8 @@ let state = {
   terminalInput: "",
   configRaw: null,
   pinned: false,
+  shellSessionId: null,
+  shellStatus: "closed", // closed | connecting | open
 };
 
 function formatDuration(seconds) {
@@ -35,6 +37,8 @@ function render() {
   const content = state.tab === "devices" ? renderDevices()
     : state.tab === "history" ? renderHistory()
     : state.tab === "settings" ? renderSettings()
+    : state.tab === "terminal" ? renderTerminal()
+    : state.tab === "shell" ? renderShell()
     : renderTerminal();
 
   app.innerHTML = `
@@ -48,7 +52,8 @@ function render() {
       </select>
     </div>
     <div class="tabs">
-      <div class="tab ${state.tab === "terminal" ? "active" : ""}" data-tab="terminal">Terminal</div>
+      <div class="tab ${state.tab === "shell" ? "active" : ""}" data-tab="shell">Shell</div>
+      <div class="tab ${state.tab === "terminal" ? "active" : ""}" data-tab="terminal">Exec</div>
       <div class="tab ${state.tab === "devices" ? "active" : ""}" data-tab="devices">Devices</div>
       <div class="tab ${state.tab === "history" ? "active" : ""}" data-tab="history">History</div>
       <div class="tab ${state.tab === "settings" ? "active" : ""}" data-tab="settings">⚙</div>
@@ -58,6 +63,7 @@ function render() {
     </div>
   `;
   bindEvents();
+  if (state.tab === "shell") initShellTab();
 }
 
 function renderTerminal() {
@@ -139,6 +145,133 @@ function escHtml(s) {
   return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// ── Shell (PTY) ──
+
+let xterm = null;
+let xtermFit = null;
+let shellResizeObserver = null;
+
+function renderShell() {
+  if (!state.selectedDevice) {
+    return `<div class="empty">Select a device to open a shell</div>`;
+  }
+  const statusText = state.shellStatus === "open" ? "connected" : state.shellStatus === "connecting" ? "connecting..." : "disconnected";
+  const statusColor = state.shellStatus === "open" ? "#00c853" : state.shellStatus === "connecting" ? "#ff9800" : "#666";
+  return `
+    <div class="shell-container">
+      <div class="shell-toolbar">
+        <button id="shell-connect">${state.shellStatus === "closed" ? "Connect" : "Reconnect"}</button>
+        <button id="shell-disconnect" ${state.shellStatus === "closed" ? "disabled" : ""}>Disconnect</button>
+        <span class="shell-status" style="color:${statusColor}">${statusText}</span>
+      </div>
+      <div id="xterm-container"></div>
+    </div>
+  `;
+}
+
+function initShellTab() {
+  const container = document.getElementById("xterm-container");
+  if (!container) return;
+
+  // Reuse existing xterm if still valid
+  if (xterm && state.shellStatus === "open") {
+    container.appendChild(xterm.element);
+    xtermFit.fit();
+    xterm.focus();
+    return;
+  }
+
+  // Create fresh xterm
+  if (xterm) { xterm.dispose(); xterm = null; }
+  if (shellResizeObserver) { shellResizeObserver.disconnect(); shellResizeObserver = null; }
+
+  xterm = new Terminal({
+    cursorBlink: true,
+    fontSize: 12,
+    fontFamily: '"SF Mono", Menlo, Monaco, "Courier New", monospace',
+    theme: { background: "#0f0f1a", foreground: "#e0e0e0", cursor: "#7c8aff", selectionBackground: "#7c8aff44" },
+    allowProposedApi: true,
+  });
+  xtermFit = new FitAddon.FitAddon();
+  xterm.loadAddon(xtermFit);
+  xterm.open(container);
+  xtermFit.fit();
+
+  // Auto-resize on container size change
+  shellResizeObserver = new ResizeObserver(() => {
+    if (xtermFit) {
+      xtermFit.fit();
+      if (state.shellSessionId && state.shellStatus === "open") {
+        api.invoke("shell-resize", { sessionId: state.shellSessionId, cols: xterm.cols, rows: xterm.rows, device: state.selectedDevice });
+      }
+    }
+  });
+  shellResizeObserver.observe(container);
+
+  // Forward user input to daemon
+  xterm.onData((data) => {
+    if (state.shellSessionId && state.shellStatus === "open") {
+      const b64 = btoa(unescape(encodeURIComponent(data)));
+      api.invoke("shell-input", { sessionId: state.shellSessionId, data: b64, device: state.selectedDevice });
+    }
+  });
+
+  xterm.focus();
+
+  // Auto-connect if no session
+  if (state.shellStatus === "closed" && state.selectedDevice) {
+    openShellSession();
+  }
+
+  // Bind toolbar buttons
+  const connectBtn = document.getElementById("shell-connect");
+  const disconnectBtn = document.getElementById("shell-disconnect");
+  if (connectBtn) connectBtn.addEventListener("click", openShellSession);
+  if (disconnectBtn) disconnectBtn.addEventListener("click", closeShellSession);
+}
+
+function openShellSession() {
+  if (!state.selectedDevice || !xterm) return;
+  // Close existing session
+  if (state.shellSessionId) {
+    api.invoke("shell-close", { sessionId: state.shellSessionId, device: state.selectedDevice });
+  }
+  state.shellSessionId = crypto.randomUUID();
+  state.shellStatus = "connecting";
+  xterm.clear();
+  xterm.writeln("\x1b[90mConnecting to " + state.selectedDevice + "...\x1b[0m");
+  api.invoke("shell-open", { device: state.selectedDevice, sessionId: state.shellSessionId, cols: xterm.cols, rows: xterm.rows });
+  // Mark as open after a short delay (data arriving confirms it)
+  shellConnectTimeout = setTimeout(() => {
+    if (state.shellStatus === "connecting") {
+      state.shellStatus = "open";
+      updateShellStatus();
+    }
+  }, 1000);
+}
+let shellConnectTimeout = null;
+
+function closeShellSession() {
+  if (state.shellSessionId) {
+    api.invoke("shell-close", { sessionId: state.shellSessionId, device: state.selectedDevice });
+  }
+  state.shellSessionId = null;
+  state.shellStatus = "closed";
+  if (xterm) xterm.writeln("\r\n\x1b[90mDisconnected.\x1b[0m");
+  updateShellStatus();
+}
+
+function updateShellStatus() {
+  const el = document.querySelector(".shell-status");
+  if (!el) return;
+  const statusText = state.shellStatus === "open" ? "connected" : state.shellStatus === "connecting" ? "connecting..." : "disconnected";
+  const statusColor = state.shellStatus === "open" ? "#00c853" : state.shellStatus === "connecting" ? "#ff9800" : "#666";
+  el.textContent = statusText;
+  el.style.color = statusColor;
+  const disconnectBtn = document.getElementById("shell-disconnect");
+  if (disconnectBtn) disconnectBtn.disabled = state.shellStatus === "closed";
+}
+
 // Command history (up/down arrow)
 let cmdHistory = [];
 let cmdHistoryIdx = -1;
@@ -149,7 +282,15 @@ function bindEvents() {
   });
 
   const gd = document.getElementById("global-device");
-  if (gd) gd.addEventListener("change", (e) => { state.selectedDevice = e.target.value; render(); });
+  if (gd) gd.addEventListener("change", (e) => {
+    const newDevice = e.target.value;
+    // Close shell session if device changed
+    if (newDevice !== state.selectedDevice && state.shellSessionId) {
+      closeShellSession();
+    }
+    state.selectedDevice = newDevice;
+    render();
+  });
 
   // Terminal input
   const ti = document.getElementById("term-input");
@@ -278,6 +419,35 @@ async function refreshData() {
 api.onDaemonStatus((data) => { state.connected = data.connected; render(); });
 api.onRefresh(async () => { await refreshData(); render(); });
 api.onPinnedChanged((data) => { state.pinned = data.pinned; render(); });
+
+// Shell session events from daemon
+api.on("shell-data", (msg) => {
+  if (msg.sessionId !== state.shellSessionId) return;
+  if (state.shellStatus === "connecting") {
+    state.shellStatus = "open";
+    clearTimeout(shellConnectTimeout);
+    updateShellStatus();
+  }
+  if (xterm) {
+    try {
+      const decoded = decodeURIComponent(escape(atob(msg.data)));
+      xterm.write(decoded);
+    } catch {
+      xterm.write(atob(msg.data));
+    }
+  }
+});
+
+api.on("shell-exit", (msg) => {
+  if (msg.sessionId !== state.shellSessionId) return;
+  state.shellStatus = "closed";
+  state.shellSessionId = null;
+  if (xterm) {
+    const reason = msg.error ? ` (${msg.error})` : "";
+    xterm.writeln(`\r\n\x1b[90mShell exited with code ${msg.exitCode}${reason}\x1b[0m`);
+  }
+  updateShellStatus();
+});
 
 (async () => {
   const pinnedState = await api.getPinned();

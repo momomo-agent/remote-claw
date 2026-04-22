@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>RemoteClaw</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 ::-webkit-scrollbar { width: 6px; }
@@ -142,12 +143,23 @@ body {
 .settings-saved { color: #00c853; font-size: 10px; text-align: center; margin-top: 8px; display: none; }
 .settings-note { color: #555; font-size: 10px; margin-top: 4px; }
 
+/* Shell (xterm) */
+.shell-container { flex: 1; display: flex; flex-direction: column; height: 100%; }
+.shell-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #16162a; border-bottom: 1px solid #2a2a4a; -webkit-app-region: no-drag; }
+.shell-toolbar button { background: #2a2a4a; color: #ccc; border: none; padding: 4px 10px; border-radius: 4px; font-size: 10px; cursor: pointer; }
+.shell-toolbar button:hover { background: #3a3a5a; }
+.shell-toolbar .shell-status { color: #666; font-size: 10px; margin-left: auto; }
+#xterm-container { flex: 1; padding: 4px; }
+#xterm-container .xterm { height: 100%; }
+
 /* Empty state */
 .empty { text-align: center; padding: 40px 20px; color: #444; font-size: 12px; }
 </style>
 </head>
 <body>
 <div id="app"></div>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

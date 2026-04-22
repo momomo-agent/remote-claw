@@ -373,6 +373,15 @@ export class DeviceHub {
             ws.send(JSON.stringify({ type: "file-error", transferId: msg.transferId, error: `device ${msg.to} not connected` }));
           }
         }
+
+        // Shell session relay — forward between devices
+        if (msg.type === "shell-open" || msg.type === "shell-input" || msg.type === "shell-resize" || msg.type === "shell-close" ||
+            msg.type === "shell-data" || msg.type === "shell-exit") {
+          const target = this.devices.get(msg.to);
+          if (target) {
+            target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
+          }
+        }
       } catch {}
     });
 
