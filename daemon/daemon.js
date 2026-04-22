@@ -27,8 +27,6 @@ function getDeviceName() {
 const DEFAULT_CONFIG = {
   server: "wss://remote.momomo.dev",
   token: "CHANGE_ME",
-  deviceName: getDeviceName(),
-  capabilities: ["shell"],
 };
 
 function loadConfig() {
@@ -51,8 +49,9 @@ let reconnectDelay = 1000;
 const MAX_DELAY = 30000;
 
 function connect() {
-  const url = `${config.server}/ws?device=${encodeURIComponent(config.deviceName)}&token=${encodeURIComponent(config.token)}&capabilities=${encodeURIComponent(config.capabilities.join(","))}`;
-  console.log(`Connecting to ${config.server} as "${config.deviceName}"...`);
+  const name = config.deviceName || getDeviceName();
+  const url = `${config.server}/ws?device=${encodeURIComponent(name)}&token=${encodeURIComponent(config.token)}`;
+  console.log(`Connecting to ${config.server} as "${name}"...`);
 
   ws = new WebSocket(url);
 

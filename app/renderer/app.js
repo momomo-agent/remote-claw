@@ -1,5 +1,5 @@
 // RemoteClaw Renderer
-const { ipcRenderer } = require("electron");
+const api = window.electronAPI;
 
 let state = {
   tab: "terminal",
@@ -13,6 +13,7 @@ let state = {
   terminalLines: [],
   terminalInput: "",
   configRaw: null,
+  pinned: false,
 };
 
 function formatDuration(seconds) {
@@ -37,8 +38,9 @@ function render() {
     : renderTerminal();
 
   app.innerHTML = `
+    ${state.pinned ? '<div class="pin-close-btn" id="pin-close">✕</div>' : ''}
     <div class="header">
-      <div class="status-dot ${state.connected ? "on" : "off"}"></div>
+      <div class="status-dot ${state.connected ? "on" : "off"}" id="conn-toggle" style="cursor:pointer" title="Click to ${state.connected ? 'disconnect' : 'connect'}"></div>
       <div class="header-url">${state.serverUrl || "..."}</div>
       <select class="device-picker" id="global-device">
         <option value="">no device</option>
@@ -73,7 +75,7 @@ function renderTerminal() {
       <div class="term-output" id="term-output">${lines}</div>
       <div class="term-input-row">
         <span class="term-prompt">${escHtml(state.selectedDevice || "?")}$</span>
-        <input class="term-input" id="term-input" placeholder="${state.selectedDevice ? "type a command..." : "select a device first"}" 
+        <input class="term-input" id="term-input" placeholder="${state.selectedDevice ? "type a command..." : "select a device first"}"
           value="${escHtml(state.terminalInput)}" ${!state.selectedDevice || state.executing ? "disabled" : ""} />
       </div>
     </div>
@@ -86,7 +88,7 @@ function renderDevices() {
     <div class="device-item" data-device="${escHtml(d.id)}">
       <div>
         <div class="device-name">${escHtml(d.name)}</div>
-        <div class="device-caps">${(d.capabilities || []).map(c => `<span class="cap-tag">${escHtml(c)}</span>`).join("")}</div>
+        <div class="device-caps"></div>
       </div>
       <div class="device-time">
         <div style="color:#00c853;font-size:10px">online</div>
@@ -126,11 +128,6 @@ function renderSettings() {
         <div class="settings-label">Device Name</div>
         <input class="settings-input" id="s-device" value="${escHtml(state.configRaw?.deviceName || '')}" placeholder="auto-detected" />
         <div class="settings-note">Leave empty for auto-detection</div>
-      </div>
-      <div class="settings-group">
-        <div class="settings-label">Capabilities</div>
-        <input class="settings-input" id="s-caps" value="${escHtml((state.configRaw?.capabilities || []).join(', '))}" placeholder="shell, xcodebuild, screenshot" />
-        <div class="settings-note">Comma-separated. Informational only, doesn't limit execution</div>
       </div>
       <button class="settings-btn" id="s-save">Save & Reconnect</button>
       <div class="settings-saved" id="s-saved">Saved!</div>
@@ -204,16 +201,23 @@ function bindEvents() {
     const cfg = {
       server: document.getElementById("s-server").value.trim() || "wss://remote.momomo.dev",
       token: document.getElementById("s-token").value.trim(),
-      capabilities: document.getElementById("s-caps").value.split(",").map(s => s.trim()).filter(Boolean),
     };
     const dn = document.getElementById("s-device").value.trim();
     if (dn) cfg.deviceName = dn;
-    await ipcRenderer.invoke("save-config", cfg);
+    await api.saveConfig(cfg);
     const saved = document.getElementById("s-saved");
     if (saved) { saved.style.display = "block"; setTimeout(() => saved.style.display = "none", 2000); }
     await refreshData();
     render();
   });
+
+  // Connection toggle
+  const ct = document.getElementById("conn-toggle");
+  if (ct) ct.addEventListener("click", async () => { await api.toggleConnection(); });
+
+  // Pin close button
+  const pinClose = document.getElementById("pin-close");
+  if (pinClose) pinClose.addEventListener("click", () => api.closeWindow());
 
   // Scroll terminal to bottom
   const to = document.getElementById("term-output");
@@ -236,7 +240,7 @@ async function runTerminalCmd() {
   render();
 
   try {
-    const result = await ipcRenderer.invoke("exec-command", { device: state.selectedDevice, command: cmd });
+    const result = await api.execCommand({ device: state.selectedDevice, command: cmd });
     if (result.error) {
       state.terminalLines.push({ type: "error", text: result.error });
     } else {
@@ -250,7 +254,6 @@ async function runTerminalCmd() {
   }
 
   state.executing = false;
-  // Keep last 200 lines
   if (state.terminalLines.length > 200) state.terminalLines = state.terminalLines.slice(-200);
   await refreshData();
   render();
@@ -258,9 +261,9 @@ async function runTerminalCmd() {
 
 async function refreshData() {
   const [cfg, devices, history] = await Promise.all([
-    ipcRenderer.invoke("get-config"),
-    ipcRenderer.invoke("fetch-devices"),
-    ipcRenderer.invoke("fetch-history", 50),
+    api.getConfig(),
+    api.fetchDevices(),
+    api.fetchHistory(50),
   ]);
   state.serverUrl = cfg.httpBase;
   state.connected = cfg.connected;
@@ -272,10 +275,13 @@ async function refreshData() {
 
 // ── Init ──
 
-ipcRenderer.on("daemon-status", (_, data) => { state.connected = data.connected; render(); });
-ipcRenderer.on("refresh", async () => { await refreshData(); render(); });
+api.onDaemonStatus((data) => { state.connected = data.connected; render(); });
+api.onRefresh(async () => { await refreshData(); render(); });
+api.onPinnedChanged((data) => { state.pinned = data.pinned; render(); });
 
 (async () => {
+  const pinnedState = await api.getPinned();
+  state.pinned = pinnedState?.pinned || false;
   await refreshData();
   render();
   setInterval(async () => { await refreshData(); render(); }, 5000);
