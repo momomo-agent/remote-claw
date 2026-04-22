@@ -422,6 +422,18 @@ api.onDaemonStatus((data) => { state.connected = data.connected; render(); });
 api.onRefresh(async () => { await refreshData(); render(); });
 api.onPinnedChanged((data) => { state.pinned = data.pinned; render(); });
 
+// Pin detection — runs in renderer (hot-updatable)
+api.on("window-moved", (data) => {
+  if (state.pinned || !data.trayBounds) return;
+  const wb = data.bounds;
+  const tb = data.trayBounds;
+  const dx = Math.abs(wb.x - (tb.x - wb.width / 2 + tb.width / 2));
+  const dy = Math.abs(wb.y - (tb.y + tb.height));
+  if (dx > 50 || dy > 50) {
+    api.invoke("set-pinned", { pinned: true });
+  }
+});
+
 // Shell session events from daemon
 api.on("shell-data", (msg) => {
   if (msg.sessionId !== state.shellSessionId) return;

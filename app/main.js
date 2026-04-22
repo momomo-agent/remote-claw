@@ -237,6 +237,17 @@ ipcMain.handle("save-config", async (_, newCfg) => {
 
 ipcMain.handle("get-pinned", () => ({ pinned: isPinned }));
 
+ipcMain.handle("set-pinned", (_, { pinned }) => {
+  isPinned = pinned;
+  mb._pinned = pinned;
+  if (pinned && mb?.window) {
+    mb.window.setAlwaysOnTop(false);
+    mb.window.setVisibleOnAllWorkspaces(false);
+  }
+  sendToRenderer("pinned-changed", { pinned });
+  return { ok: true };
+});
+
 ipcMain.handle("toggle-connection", () => {
   if (daemonConnected || daemonWs) {
     manualDisconnect = true;
@@ -256,7 +267,6 @@ ipcMain.handle("close-window", () => {
   if (mb?.window) {
     isPinned = false;
     mb._pinned = false;
-    sendToRenderer("pinned-changed", { pinned: false });
     mb.window.hide();
   }
 });
@@ -675,19 +685,10 @@ app.on("ready", () => {
       }
     });
 
-    // Track window movement for pinning
+    // Track window movement — report to renderer, let renderer decide pinning
     mb.window.on("move", () => {
-      if (isPinned || !trayBounds) return;
       const winBounds = mb.window.getBounds();
-      const dx = Math.abs(winBounds.x - (trayBounds.x - winBounds.width / 2 + trayBounds.width / 2));
-      const dy = Math.abs(winBounds.y - (trayBounds.y + trayBounds.height));
-      if (dx > 50 || dy > 50) {
-        isPinned = true;
-        mb._pinned = true; // patch menubar internals
-        mb.window.setAlwaysOnTop(false);
-        mb.window.setVisibleOnAllWorkspaces(false);
-        sendToRenderer("pinned-changed", { pinned: true });
-      }
+      sendToRenderer("window-moved", { bounds: winBounds, trayBounds });
     });
 
     // Remove ALL existing blur listeners (menubar adds one that calls hide)
@@ -699,12 +700,9 @@ app.on("ready", () => {
       mb.hideWindow();
     });
 
-    // When window is hidden, reset pin state
+    // When window is hidden, notify renderer
     mb.window.on("hide", () => {
-      if (isPinned) {
-        isPinned = false;
-        sendToRenderer("pinned-changed", { pinned: false });
-      }
+      sendToRenderer("window-hidden", {});
     });
 
     // Monkey-patch window.hide as extra safety
