@@ -363,6 +363,16 @@ export class DeviceHub {
           }
         }
         if (msg.type === "ping") ws.send(JSON.stringify({ type: "pong" }));
+
+        // File transfer relay — forward between devices
+        if (msg.type === "file-start" || msg.type === "file-chunk" || msg.type === "file-end") {
+          const target = this.devices.get(msg.to);
+          if (target) {
+            target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
+          } else {
+            ws.send(JSON.stringify({ type: "file-error", transferId: msg.transferId, error: `device ${msg.to} not connected` }));
+          }
+        }
       } catch {}
     });
 

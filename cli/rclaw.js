@@ -211,43 +211,38 @@ async function pushFile(localPath, target) {
 
   if (!fs.existsSync(localPath)) { console.error(`File not found: ${localPath}`); process.exit(1); }
   const stat = fs.statSync(localPath);
-  const totalSize = stat.size;
-  const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
-  const filename = path.basename(localPath);
+  console.log(`Pushing ${path.basename(localPath)} (${(stat.size / 1024 / 1024).toFixed(1)}MB) to ${device}:${remotePath}`);
 
-  console.log(`Pushing ${filename} (${(totalSize / 1024 / 1024).toFixed(1)}MB) to ${device}:${remotePath}`);
-  console.log(`${totalChunks} chunks @ ${CHUNK_SIZE / 1024}KB each`);
+  // Find which device we're running on (source device)
+  const { data: devices } = await api("GET", "/devices");
+  if (!Array.isArray(devices)) { console.error("Cannot list devices"); process.exit(1); }
 
-  // Upload chunks to Worker
-  const fd = fs.openSync(localPath, "r");
-  const buf = Buffer.alloc(CHUNK_SIZE);
-  let transferId = null;
-
-  for (let i = 0; i < totalChunks; i++) {
-    const bytesRead = fs.readSync(fd, buf, 0, CHUNK_SIZE, i * CHUNK_SIZE);
-    const chunk = buf.slice(0, bytesRead).toString("base64");
-    const { data } = await api("POST", "/transfer/upload", {
-      filename, chunk, chunkIndex: i, totalChunks, totalSize,
-      transferId: transferId || undefined,
-    });
-    if (data.error) { console.error("Upload error:", data.error); process.exit(1); }
-    if (!transferId) transferId = data.transferId;
-    process.stdout.write(`\r  chunk ${i + 1}/${totalChunks}`);
-  }
-  fs.closeSync(fd);
-  console.log("\n  uploaded to relay.");
-
-  // Tell target device to download from relay
-  const { data: devicesData } = await api("GET", "/devices");
-  const conn = Array.isArray(devicesData) && devicesData.find(d => d.name === device || d.id === device);
-  if (!conn) { console.error(`Device ${device} not connected. Transfer ${transferId} available for 5 min.`); return; }
-
-  // Send download command via exec
-  const { data: execData } = await api("POST", "/exec", {
-    device, command: `__RCLAW_DOWNLOAD__ ${transferId} ${remotePath} ${totalChunks}`, oneshot: false, timeout: 300000,
+  // Find source device (the one running this CLI)
+  const os = require("os");
+  const hostname = os.hostname().replace(/\.local$/, "");
+  const sourceDevice = devices.find(d => {
+    const hn = hostname.toLowerCase();
+    const dn = d.name.toLowerCase();
+    return dn === hn || dn === os.hostname().toLowerCase() ||
+      hn.includes(dn) || dn.includes(hn);
   });
-  console.log(`  download requested on ${device} (task: ${execData.taskId || "sent"})`);
-  console.log(`  transfer: ${transferId}`);
+
+  if (sourceDevice) {
+    // Tell source daemon to send file via WS
+    console.log(`  via ${sourceDevice.name} -> WS relay -> ${device}`);
+    const absPath = path.resolve(localPath);
+    const { data } = await api("POST", "/exec", {
+      device: sourceDevice.name,
+      command: `__RCLAW_SEND__ ${device} ${absPath} ${remotePath}`,
+      oneshot: true, timeout: 300000,
+    });
+    if (data.stdout) process.stdout.write(data.stdout);
+    if (data.stderr) process.stderr.write(data.stderr);
+    console.log("  done.");
+  } else {
+    console.error("Cannot find source device. Make sure daemon is running on this machine.");
+    process.exit(1);
+  }
 }
 
 async function pullFile(source, localPath) {
@@ -258,42 +253,29 @@ async function pullFile(source, localPath) {
   const [device, remotePath] = [source.split(":")[0], source.split(":").slice(1).join(":")];
   const fs = require("fs");
   const path = require("path");
+  const os = require("os");
 
   console.log(`Pulling ${device}:${remotePath} -> ${localPath}`);
 
-  // Tell device to upload the file
-  const { data } = await api("POST", "/transfer/push", { device, remotePath });
-  if (data.error) { console.error("Error:", data.error); process.exit(1); }
-  const transferId = data.transferId;
-  console.log(`  upload requested (transfer: ${transferId})`);
+  // Find local device name
+  const { data: devices } = await api("GET", "/devices");
+  const hostname = os.hostname().replace(/\.local$/, "");
+  const localDevice = Array.isArray(devices) && devices.find(d => {
+    const hn = hostname.toLowerCase();
+    const dn = d.name.toLowerCase();
+    return dn === hn || dn === os.hostname().toLowerCase() ||
+      hn.includes(dn) || dn.includes(hn);
+  });
+  if (!localDevice) { console.error("Local daemon not found. Make sure daemon is running."); process.exit(1); }
 
-  // Poll until transfer is complete
-  let info;
-  for (let attempt = 0; attempt < 120; attempt++) {
-    await new Promise(r => setTimeout(r, 2000));
-    const { data: infoData } = await api("GET", `/transfer/info/${transferId}`);
-    if (infoData.error) continue;
-    info = infoData;
-    if (info.chunks > 0 && info.chunks >= Math.ceil(info.total_size / CHUNK_SIZE)) break;
-    process.stdout.write(`\r  waiting... ${info.chunks || 0} chunks`);
-  }
-
-  if (!info || !info.chunks) { console.error("\n  Transfer timed out or failed"); process.exit(1); }
-  const totalChunks = Math.ceil(info.total_size / CHUNK_SIZE);
-  console.log(`\n  downloading ${totalChunks} chunks...`);
-
-  // Download chunks
-  const dir = path.dirname(localPath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const fd = fs.openSync(localPath, "w");
-
-  for (let i = 0; i < totalChunks; i++) {
-    const { data: chunkData } = await api("GET", `/transfer/download/${transferId}?chunk=${i}`);
-    if (chunkData.error) { console.error(`\n  chunk ${i} error: ${chunkData.error}`); process.exit(1); }
-    const buf = Buffer.from(chunkData.chunk, "base64");
-    fs.writeSync(fd, buf, 0, buf.length);
-    process.stdout.write(`\r  chunk ${i + 1}/${totalChunks}`);
-  }
-  fs.closeSync(fd);
-  console.log(`\n  done: ${localPath} (${(info.total_size / 1024 / 1024).toFixed(1)}MB)`);
+  const absPath = path.resolve(localPath);
+  // Tell remote device to send file to us
+  const { data } = await api("POST", "/exec", {
+    device,
+    command: `__RCLAW_SEND__ ${localDevice.name} ${remotePath} ${absPath}`,
+    oneshot: true, timeout: 300000,
+  });
+  if (data.stdout) process.stdout.write(data.stdout);
+  if (data.stderr) process.stderr.write(data.stderr);
+  console.log("  done.");
 }

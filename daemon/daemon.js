@@ -65,8 +65,10 @@ function connect() {
       const msg = JSON.parse(data.toString());
       if (msg.type === "exec") execCommand(msg.taskId, msg.command);
       if (msg.type === "pong") { /* keepalive ack */ }
-      if (msg.type === "file-upload") handleFileUpload(msg.transferId, msg.path);
-      if (msg.type === "file-download") handleFileDownload(msg.transferId, msg.path, msg.totalChunks);
+      // File transfer via WS relay
+      if (msg.type === "file-start") handleIncomingFileStart(msg);
+      if (msg.type === "file-chunk") handleIncomingFileChunk(msg);
+      if (msg.type === "file-end") handleIncomingFileEnd(msg);
     } catch (e) {
       console.error("Bad message:", e.message);
     }
@@ -86,21 +88,16 @@ function connect() {
 // ── Command Execution ──
 
 function execCommand(taskId, command) {
-  // Intercept file download commands
-  if (command.startsWith("__RCLAW_DOWNLOAD__ ")) {
+  // Intercept file send commands
+  if (command.startsWith("__RCLAW_SEND__ ")) {
     const parts = command.split(" ");
-    const transferId = parts[1];
-    const destPath = parts[2];
-    const totalChunks = parseInt(parts[3]);
-    handleFileDownload(transferId, destPath, totalChunks).then(() => {
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: "result", taskId, stdout: `Downloaded to ${destPath}\n`, stderr: "", exitCode: 0 }));
-      }
-    }).catch((e) => {
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: "result", taskId, stdout: "", stderr: e.message, exitCode: 1 }));
-      }
-    });
+    const targetDevice = parts[1];
+    const localPath = parts[2];
+    const remotePath = parts[3];
+    sendFileViaWs(targetDevice, localPath, remotePath);
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: "result", taskId, stdout: `Sending ${localPath} to ${targetDevice}:${remotePath}\n`, stderr: "", exitCode: 0 }));
+    }
     return;
   }
 
@@ -137,103 +134,81 @@ function execCommand(taskId, command) {
 
 // ── Keepalive ──
 
-// ── File Transfer ──
+// ── File Transfer (WebSocket relay) ──
 
 const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB per chunk
+const incomingTransfers = new Map(); // transferId -> { fd, path, received, total }
 
-function getHttpBase() {
-  return config.server.replace("wss://", "https://").replace("ws://", "http://");
-}
-
-function apiRequest(method, urlPath, body) {
-  const http = require("http");
-  const base = getHttpBase();
-  const fullUrl = `${base}${urlPath}`;
-  const headers = { Host: new URL(base).hostname, Authorization: `Bearer ${config.token}` };
-  if (body) { headers["Content-Type"] = "application/json"; }
-  const data = body ? JSON.stringify(body) : null;
-  if (data) headers["Content-Length"] = Buffer.byteLength(data);
-
-  return new Promise((resolve, reject) => {
-    const req = http.request({
-      hostname: "127.0.0.1", port: 7890, method,
-      path: fullUrl, headers, timeout: 60000,
-    }, (res) => {
-      let d = "";
-      res.on("data", (c) => d += c);
-      res.on("end", () => {
-        try { resolve(JSON.parse(d)); } catch { resolve(d); }
-      });
-    });
-    req.on("error", reject);
-    if (data) req.write(data);
-    req.end();
-  });
-}
-
-async function handleFileUpload(transferId, filePath) {
-  console.log(`[upload] ${filePath} -> transfer ${transferId.slice(0, 8)}`);
+// Send a local file to another device via WS relay
+function sendFileViaWs(targetDevice, localPath, remotePath) {
+  const transferId = require("crypto").randomUUID();
+  console.log(`[send] ${localPath} -> ${targetDevice}:${remotePath}`);
   try {
-    const stat = fs.statSync(filePath);
+    const stat = fs.statSync(localPath);
     const totalSize = stat.size;
     const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
-    const fd = fs.openSync(filePath, "r");
-    const buf = Buffer.alloc(CHUNK_SIZE);
 
+    // Send start
+    ws.send(JSON.stringify({
+      type: "file-start", to: targetDevice, transferId,
+      filename: path.basename(localPath), remotePath, totalSize, totalChunks,
+    }));
+
+    // Send chunks
+    const fd = fs.openSync(localPath, "r");
+    const buf = Buffer.alloc(CHUNK_SIZE);
     for (let i = 0; i < totalChunks; i++) {
       const bytesRead = fs.readSync(fd, buf, 0, CHUNK_SIZE, i * CHUNK_SIZE);
-      const chunk = buf.slice(0, bytesRead).toString("base64");
-      const result = await apiRequest("POST", "/transfer/upload", {
-        filename: path.basename(filePath),
-        chunk,
-        chunkIndex: i,
-        totalChunks,
-        totalSize,
-        transferId: i === 0 ? undefined : transferId,
-      });
-      // First chunk returns the transferId
-      if (i === 0 && result.transferId) transferId = result.transferId;
-      console.log(`[upload] chunk ${i + 1}/${totalChunks}`);
+      ws.send(JSON.stringify({
+        type: "file-chunk", to: targetDevice, transferId,
+        index: i, data: buf.slice(0, bytesRead).toString("base64"),
+      }));
+      console.log(`[send] chunk ${i + 1}/${totalChunks}`);
     }
     fs.closeSync(fd);
 
-    // Notify via WebSocket
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({ type: "file-upload-done", transferId, path: filePath, size: totalSize }));
-    }
-    console.log(`[upload] done: ${transferId}`);
+    // Send end
+    ws.send(JSON.stringify({ type: "file-end", to: targetDevice, transferId }));
+    console.log(`[send] done: ${transferId}`);
   } catch (e) {
-    console.error(`[upload] error: ${e.message}`);
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({ type: "file-upload-error", transferId, error: e.message }));
-    }
+    console.error(`[send] error: ${e.message}`);
   }
 }
 
-async function handleFileDownload(transferId, destPath, totalChunks) {
-  console.log(`[download] transfer ${transferId.slice(0, 8)} -> ${destPath}`);
-  try {
-    const dir = path.dirname(destPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const fd = fs.openSync(destPath, "w");
+// Receive file-start: prepare to receive
+function handleIncomingFileStart(msg) {
+  console.log(`[recv] start: ${msg.filename} (${msg.totalChunks} chunks, ${(msg.totalSize / 1024 / 1024).toFixed(1)}MB)`);
+  const destPath = msg.remotePath.replace(/^~/, os.homedir());
+  const dir = path.dirname(destPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const fd = fs.openSync(destPath, "w");
+  incomingTransfers.set(msg.transferId, {
+    fd, path: destPath, received: 0, total: msg.totalChunks,
+  });
+}
 
-    for (let i = 0; i < totalChunks; i++) {
-      const result = await apiRequest("GET", `/transfer/download/${transferId}?chunk=${i}`);
-      const buf = Buffer.from(result.chunk, "base64");
-      fs.writeSync(fd, buf, 0, buf.length);
-      console.log(`[download] chunk ${i + 1}/${totalChunks}`);
-    }
-    fs.closeSync(fd);
+// Receive file-chunk: write data
+function handleIncomingFileChunk(msg) {
+  const t = incomingTransfers.get(msg.transferId);
+  if (!t) return;
+  const buf = Buffer.from(msg.data, "base64");
+  fs.writeSync(t.fd, buf, 0, buf.length);
+  t.received++;
+  if (t.received % 10 === 0 || t.received === t.total) {
+    console.log(`[recv] chunk ${t.received}/${t.total}`);
+  }
+}
 
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({ type: "file-download-done", transferId, path: destPath }));
-    }
-    console.log(`[download] done: ${destPath}`);
-  } catch (e) {
-    console.error(`[download] error: ${e.message}`);
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({ type: "file-download-error", transferId, error: e.message }));
-    }
+// Receive file-end: close file
+function handleIncomingFileEnd(msg) {
+  const t = incomingTransfers.get(msg.transferId);
+  if (!t) return;
+  fs.closeSync(t.fd);
+  incomingTransfers.delete(msg.transferId);
+  console.log(`[recv] done: ${t.path} (${t.received} chunks)`);
+  // Notify sender
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: "result", taskId: msg.transferId, stdout: `Received: ${t.path}\n`, stderr: "", exitCode: 0 }));
   }
 }
 
