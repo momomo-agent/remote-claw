@@ -383,7 +383,11 @@ async function runTerminalCmd() {
   render();
 
   try {
-    const result = await api.execCommand({ device: state.selectedDevice, command: cmd });
+    const result = await apiFetch("/exec", {
+      method: "POST",
+      body: JSON.stringify({ device: state.selectedDevice, command: cmd, oneshot: true, timeout: 30000 }),
+      fallback: { error: "request failed" },
+    });
     if (result.error) {
       state.terminalLines.push({ type: "error", text: result.error });
     } else {
@@ -402,15 +406,40 @@ async function runTerminalCmd() {
   render();
 }
 
+let _httpBase = null;
+let _token = null;
+
+async function ensureConfig() {
+  if (!_httpBase) {
+    const cfg = await api.getConfig();
+    _httpBase = cfg.httpBase;
+    _token = cfg.raw?.token;
+    state.serverUrl = cfg.httpBase;
+    state.connected = cfg.connected;
+    state.configRaw = cfg.raw || null;
+  }
+}
+
+async function apiFetch(path, opts = {}) {
+  await ensureConfig();
+  try {
+    const res = await fetch(`${_httpBase}${path}`, {
+      ...opts,
+      headers: { Authorization: `Bearer ${_token}`, "Content-Type": "application/json", ...opts.headers },
+    });
+    return await res.json();
+  } catch { return opts.fallback ?? []; }
+}
+
 async function refreshData() {
-  const [cfg, devices, history] = await Promise.all([
-    api.getConfig(),
-    api.fetchDevices(),
-    api.fetchHistory(50),
-  ]);
-  state.serverUrl = cfg.httpBase;
+  await ensureConfig();
+  const cfg = await api.getConfig();
   state.connected = cfg.connected;
   state.configRaw = cfg.raw || null;
+  const [devices, history] = await Promise.all([
+    apiFetch("/devices"),
+    apiFetch("/history?limit=50"),
+  ]);
   state.devices = Array.isArray(devices) ? devices : [];
   state.history = Array.isArray(history) ? history : [];
   if (state.devices.length && !state.selectedDevice) state.selectedDevice = state.devices[0].id;
