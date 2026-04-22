@@ -311,6 +311,7 @@ function renderFiles() {
       <div class="files-path">${state.filesPath === '~' ? '~' : breadcrumb || '/'}</div>
       <button class="files-btn" id="files-refresh" title="Refresh">↻</button>
       <button class="files-btn" id="files-editor" title="Open in Editor">✎ Code</button>
+      <button class="files-btn" id="files-vscode" title="Open in VS Code" style="color:var(--accent)">⌘ VS Code</button>
     </div>
     ${body}
   `;
@@ -477,6 +478,11 @@ function bindEvents() {
   const filesEditor = document.getElementById('files-editor');
   if (filesEditor) filesEditor.addEventListener('click', () => {
     api.invoke('open-editor', { dir: state.filesPath, device: state.selectedDevice });
+  });
+
+  const filesVscode = document.getElementById('files-vscode');
+  if (filesVscode) filesVscode.addEventListener('click', () => {
+    api.invoke('open-code-server', { device: state.selectedDevice, folder: state.filesPath });
   });
 
   document.querySelectorAll('.file-row[data-isdir="true"]').forEach(el => {

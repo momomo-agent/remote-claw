@@ -301,7 +301,37 @@ ipcMain.handle("open-editor", (_, { dir, file, device, title }) => {
   return { ok: true };
 });
 
-// ── IPC: Filesystem ──
+ipcMain.handle("open-code-server", async (_, { device, folder }) => {
+  const { BrowserWindow } = require("electron");
+  // Try to resolve device IP via exec
+  let host = "127.0.0.1";
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".remoteclaw", "config.json"), "utf-8"));
+    const httpBase = cfg.httpBase || cfg.server?.replace('wss://', 'https://').replace('ws://', 'http://');
+    const token = cfg.token;
+    if (device && httpBase) {
+      const fetch = require("electron").net.fetch || globalThis.fetch;
+      const res = await fetch(`${httpBase}/exec`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device, command: 'echo $SSH_CONNECTION || hostname -I 2>/dev/null || ipconfig getifaddr en0 2>/dev/null', oneshot: true, timeout: 5000 }),
+      });
+      const data = await res.json();
+      const ip = (data.stdout || '').trim().split(/\s+/)[0];
+      if (ip && /^[\d.]+$/.test(ip)) host = ip;
+    }
+  } catch (e) { /* fallback to localhost */ }
+  const codeUrl = `http://${host}:8080` + (folder ? `/?folder=${encodeURIComponent(folder)}` : '');
+  const win = new BrowserWindow({
+    width: 1280, height: 800, minWidth: 800, minHeight: 600,
+    title: "VS Code — " + (device || "local"),
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 12, y: 12 },
+    webPreferences: { nodeIntegration: false, contextIsolation: true },
+  });
+  win.loadURL(codeUrl);
+  return { ok: true };
+});
 
 ipcMain.handle("read-file", async (_, p) => { try { return { data: fs.readFileSync(p, "utf-8") }; } catch (e) { return { error: e.message }; } });
 ipcMain.handle("write-file", async (_, { path: p, data }) => { try { fs.writeFileSync(p, data); return { ok: true }; } catch (e) { return { error: e.message }; } });
