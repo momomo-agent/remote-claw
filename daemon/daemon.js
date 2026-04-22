@@ -222,7 +222,7 @@ const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB per chunk
 const incomingTransfers = new Map(); // transferId -> { fd, path, received, total }
 
 // Send a local file to another device via WS relay
-function sendFileViaWs(targetDevice, localPath, remotePath) {
+async function sendFileViaWs(targetDevice, localPath, remotePath) {
   const transferId = require("crypto").randomUUID();
   console.log(`[send] ${localPath} -> ${targetDevice}:${remotePath}`);
   try {
@@ -236,16 +236,23 @@ function sendFileViaWs(targetDevice, localPath, remotePath) {
       filename: path.basename(localPath), remotePath, totalSize, totalChunks,
     }));
 
-    // Send chunks
+    // Send chunks with backpressure
     const fd = fs.openSync(localPath, "r");
     const buf = Buffer.alloc(CHUNK_SIZE);
     for (let i = 0; i < totalChunks; i++) {
       const bytesRead = fs.readSync(fd, buf, 0, CHUNK_SIZE, i * CHUNK_SIZE);
-      ws.send(JSON.stringify({
+      const msg = JSON.stringify({
         type: "file-chunk", to: targetDevice, transferId,
         index: i, data: buf.slice(0, bytesRead).toString("base64"),
-      }));
-      console.log(`[send] chunk ${i + 1}/${totalChunks}`);
+      });
+      // Wait for WS buffer to drain before sending next chunk
+      if (ws.bufferedAmount > 4 * 1024 * 1024) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      ws.send(msg);
+      if ((i + 1) % 10 === 0 || i === totalChunks - 1) {
+        console.log(`[send] chunk ${i + 1}/${totalChunks}`);
+      }
     }
     fs.closeSync(fd);
 

@@ -254,9 +254,9 @@ ipcMain.handle("toggle-connection", () => {
 
 ipcMain.handle("close-window", () => {
   if (mb?.window) {
-    isPinned = false;
-    mb.window.hide();
+    isPinned = false; // Must reset BEFORE hide, since hide is patched to check isPinned
     sendToRenderer("pinned-changed", { pinned: false });
+    mb.window.hide();
   }
 });
 
@@ -688,12 +688,12 @@ app.on("ready", () => {
       }
     });
 
-    // When window is hidden (e.g. by menubar auto-hide or close button), reset pin
+    // When window is hidden, reset pin state
     mb.window.on("hide", () => {
+      // If somehow hidden while pinned (shouldn't happen due to patch), just reset
       if (isPinned) {
-        // Shouldn't happen since we patched hide(), but just in case
-        mb.window.show();
-        return;
+        isPinned = false;
+        sendToRenderer("pinned-changed", { pinned: false });
       }
     });
 
