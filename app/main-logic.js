@@ -329,7 +329,7 @@ ipcMain.handle("open-code-server", async (_, { device, folder }) => {
       const res = await fetch(`${httpBase}/exec`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device, command: 'echo $SSH_CONNECTION || hostname -I 2>/dev/null || ipconfig getifaddr en0 2>/dev/null', oneshot: true, timeout: 5000 }),
+        body: JSON.stringify({ device, command: 'ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname -I 2>/dev/null | awk "{print \\$1}"', oneshot: true, timeout: 5000 }),
       });
       const data = await res.json();
       const ip = (data.stdout || '').trim().split(/\s+/)[0];
