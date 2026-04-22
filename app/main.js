@@ -130,6 +130,38 @@ function sendToRenderer(channel, data) {
 
 ipcMain.handle("get-config", () => ({ ...config, httpBase, connected: daemonConnected, raw: JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) }));
 
+// Generic shell exec — lets cloud UI run arbitrary local commands
+ipcMain.handle("local-exec", async (_, { command, timeout = 30000 }) => {
+  return new Promise((resolve) => {
+    const proc = spawn("sh", ["-c", command], { env: { ...process.env, HOME: os.homedir(), PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` }, timeout });
+    let stdout = "", stderr = "";
+    proc.stdout.on("data", (d) => { stdout += d.toString(); });
+    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.on("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
+    proc.on("error", (e) => resolve({ stdout, stderr, exitCode: -1, error: e.message }));
+  });
+});
+
+// Read/write local files — lets cloud UI access filesystem
+ipcMain.handle("read-file", async (_, filePath) => {
+  try { return { data: fs.readFileSync(filePath, "utf-8") }; }
+  catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle("write-file", async (_, { path: filePath, data }) => {
+  try { fs.writeFileSync(filePath, data); return { ok: true }; }
+  catch (e) { return { error: e.message }; }
+});
+
+// App info
+ipcMain.handle("app-info", () => ({
+  version: require("./package.json").version,
+  platform: process.platform,
+  arch: process.arch,
+  hostname: os.hostname(),
+  homedir: os.homedir(),
+}));
+
 ipcMain.handle("fetch-devices", async () => {
   try {
     const res = await fetch(`${httpBase}/devices`, { headers: { Authorization: `Bearer ${config.token}` } });
