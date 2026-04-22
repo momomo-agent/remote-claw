@@ -5,155 +5,255 @@
 <title>RemoteClaw</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 <style>
+:root {
+  --bg: #1c1c1e;
+  --bg-secondary: #2c2c2e;
+  --bg-tertiary: #3a3a3c;
+  --bg-elevated: #242426;
+  --text: #f5f5f7;
+  --text-secondary: #98989d;
+  --text-tertiary: #636366;
+  --accent: #0a84ff;
+  --accent-hover: #409cff;
+  --green: #30d158;
+  --red: #ff453a;
+  --orange: #ff9f0a;
+  --separator: rgba(84,84,88,0.35);
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #1a1a2e; }
-::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg-tertiary); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-  background: #0f0f1a;
-  color: #e0e0e0;
-  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
   overflow: hidden;
   user-select: none;
   -webkit-app-region: drag;
+  -webkit-font-smoothing: antialiased;
 }
 
 #app { display: flex; flex-direction: column; height: 100vh; }
 
-/* Header */
-.header {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; background: #16162a;
-  border-bottom: 1px solid #2a2a4a;
+/* ── Title bar ── */
+.titlebar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px 8px;
   -webkit-app-region: drag;
+  position: relative;
 }
-.status-dot {
+.titlebar-left { display: flex; align-items: center; gap: 8px; }
+.status-indicator {
   width: 8px; height: 8px; border-radius: 50%;
-  flex-shrink: 0;
+  cursor: pointer; -webkit-app-region: no-drag;
+  transition: all 0.2s;
 }
-.status-dot.on { background: #00c853; box-shadow: 0 0 6px #00c85388; }
-.status-dot.off { background: #ff3d3d; box-shadow: 0 0 6px #ff3d3d88; }
-.header-url { color: #888; font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.device-picker {
-  background: #1a1a30; border: 1px solid #2a2a4a; color: #ccc;
-  padding: 3px 6px; border-radius: 4px; font-size: 10px; outline: none;
+.status-indicator.on { background: var(--green); box-shadow: 0 0 8px rgba(48,209,88,0.5); }
+.status-indicator.off { background: var(--red); box-shadow: 0 0 8px rgba(255,69,58,0.3); }
+.titlebar-title {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  letter-spacing: -0.2px;
 }
-
-/* Tabs */
-.tabs {
-  display: flex; background: #16162a;
-  border-bottom: 1px solid #2a2a4a;
+.titlebar-right { display: flex; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
+.device-select {
+  background: var(--bg-secondary); border: 1px solid var(--separator);
+  color: var(--text-secondary); padding: 4px 8px; border-radius: var(--radius-sm);
+  font-size: 11px; outline: none; font-family: inherit;
   -webkit-app-region: no-drag;
 }
-.tab {
-  flex: 1; padding: 7px 0; text-align: center; cursor: pointer;
-  color: #666; font-size: 11px; font-weight: 500;
-  transition: all 0.15s;
+.device-select:focus { border-color: var(--accent); }
+.pin-close {
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--bg-tertiary); border: none; color: var(--text-tertiary);
+  font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s; line-height: 1;
+  -webkit-app-region: no-drag;
 }
-.tab:hover { color: #aaa; }
-.tab.active { color: #7c8aff; border-bottom: 2px solid #7c8aff; }
+.pin-close:hover { background: var(--red); color: #fff; }
 
-/* Content */
-.content { flex: 1; overflow-y: auto; -webkit-app-region: no-drag; }
+/* ── Tab bar ── */
+.tabbar {
+  display: flex; gap: 2px; padding: 0 12px 8px;
+  -webkit-app-region: no-drag;
+}
+.tabbar-item {
+  padding: 5px 12px; border-radius: var(--radius-sm);
+  font-size: 12px; font-weight: 500; color: var(--text-tertiary);
+  cursor: pointer; transition: all 0.15s;
+}
+.tabbar-item:hover { color: var(--text-secondary); background: var(--bg-secondary); }
+.tabbar-item.active { color: var(--text); background: var(--bg-secondary); }
 
-/* Device list */
-.device-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px;
-  border-bottom: 1px solid #1a1a30;
+/* ── Content ── */
+.content {
+  flex: 1; overflow-y: auto; -webkit-app-region: no-drag;
+}
+
+/* ── Cards ── */
+.card {
+  background: var(--bg-elevated); border-radius: var(--radius);
+  margin: 0 12px 8px; overflow: hidden;
+}
+.card-header {
+  padding: 10px 14px; font-size: 11px; font-weight: 600;
+  color: var(--text-secondary); text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.card-row {
+  display: flex; align-items: center; padding: 10px 14px;
+  border-top: 1px solid var(--separator); cursor: pointer;
   transition: background 0.1s;
 }
-.device-item:hover { background: #1a1a30; }
-.device-name { font-weight: 600; font-size: 12px; }
-.device-meta { color: #666; font-size: 10px; margin-top: 2px; }
-.device-caps {
-  display: flex; gap: 4px; margin-top: 3px;
-}
-.cap-tag {
-  background: #2a2a4a; color: #8888cc; font-size: 9px;
-  padding: 1px 6px; border-radius: 3px;
-}
-.device-time { margin-left: auto; color: #555; font-size: 10px; text-align: right; }
+.card-row:first-child { border-top: none; }
+.card-row:hover { background: var(--bg-secondary); }
+.card-row:active { background: var(--bg-tertiary); }
 
-/* History */
-.history-item {
-  padding: 8px 14px;
-  border-bottom: 1px solid #1a1a30;
+/* ── Device list ── */
+.device-row { gap: 10px; }
+.device-icon {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: var(--bg-secondary); display: flex; align-items: center; justify-content: center;
+  font-size: 16px; flex-shrink: 0;
 }
+.device-info { flex: 1; min-width: 0; }
+.device-name { font-size: 13px; font-weight: 500; }
+.device-detail { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
+.device-status { text-align: right; }
+.device-online { font-size: 10px; color: var(--green); font-weight: 500; }
+.device-uptime { font-size: 10px; color: var(--text-tertiary); margin-top: 1px; }
+
+/* ── History ── */
+.history-row { flex-direction: column; align-items: flex-start; gap: 4px; cursor: default; }
 .history-cmd {
-  font-family: "SF Mono", Menlo, monospace; font-size: 11px;
-  color: #c8c8ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: "SF Mono", Menlo, monospace; font-size: 12px;
+  color: var(--text); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; width: 100%;
 }
-.history-meta {
-  display: flex; gap: 8px; margin-top: 3px; color: #555; font-size: 10px;
+.history-meta { display: flex; gap: 8px; font-size: 10px; color: var(--text-tertiary); }
+.history-badge {
+  padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 600;
 }
-.history-status { font-weight: 600; }
-.history-status.done { color: #00c853; }
-.history-status.error { color: #ff3d3d; }
-.history-status.timeout { color: #ff9800; }
-.history-status.running { color: #7c8aff; }
+.badge-done { background: rgba(48,209,88,0.15); color: var(--green); }
+.badge-error { background: rgba(255,69,58,0.15); color: var(--red); }
+.badge-timeout { background: rgba(255,159,10,0.15); color: var(--orange); }
+.badge-running { background: rgba(10,132,255,0.15); color: var(--accent); }
 
-/* Terminal */
+/* ── Terminal (exec) ── */
 .terminal { display: flex; flex-direction: column; height: 100%; }
 .term-output {
-  flex: 1; overflow-y: auto; padding: 8px 12px;
-  font-family: "SF Mono", Menlo, monospace; font-size: 11px;
-  line-height: 1.5;
+  flex: 1; overflow-y: auto; padding: 10px 14px;
+  font-family: "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.6;
 }
 .term-line { white-space: pre-wrap; word-break: break-all; }
-.term-cmd { color: #e0e0e0; margin-top: 4px; }
-.term-prompt { color: #7c8aff; margin-right: 6px; font-weight: 600; }
-.term-stdout { color: #c8c8c8; }
-.term-stderr { color: #ff6b6b; }
-.term-info { color: #555; font-size: 10px; }
-.term-error { color: #ff3d3d; }
+.term-cmd { color: var(--text); margin-top: 6px; }
+.term-prompt { color: var(--accent); margin-right: 6px; font-weight: 600; }
+.term-stdout { color: #d1d1d6; }
+.term-stderr { color: var(--red); opacity: 0.85; }
+.term-info { color: var(--text-tertiary); font-size: 10px; }
+.term-error { color: var(--red); }
 .term-input-row {
-  display: flex; align-items: center; padding: 8px 12px;
-  background: #16162a; border-top: 1px solid #2a2a4a;
-  -webkit-app-region: no-drag;
-  font-family: "SF Mono", Menlo, monospace; font-size: 11px;
+  display: flex; align-items: center; padding: 10px 14px;
+  background: var(--bg-elevated); border-top: 1px solid var(--separator);
+  font-family: "SF Mono", Menlo, monospace; font-size: 12px;
 }
 .term-input {
-  flex: 1; background: transparent; border: none; color: #e0e0e0;
-  font-family: "SF Mono", Menlo, monospace; font-size: 11px;
-  outline: none; margin-left: 6px;
+  flex: 1; background: transparent; border: none; color: var(--text);
+  font-family: inherit; font-size: inherit; outline: none; margin-left: 6px;
 }
-.term-input:disabled { opacity: 0.4; }
-.term-input::placeholder { color: #444; }
+.term-input:disabled { opacity: 0.3; }
+.term-input::placeholder { color: var(--text-tertiary); }
 
-/* Settings */
-.settings { padding: 14px; -webkit-app-region: no-drag; }
-.settings-group { margin-bottom: 14px; }
-.settings-label { color: #888; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-.settings-input {
-  width: 100%; background: #1a1a30; border: 1px solid #2a2a4a; color: #e0e0e0;
-  padding: 7px 10px; border-radius: 6px; font-size: 11px; outline: none;
-  font-family: "SF Mono", Menlo, monospace;
-}
-.settings-input:focus { border-color: #7c8aff; }
-.settings-input::placeholder { color: #444; }
-.settings-btn {
-  background: #7c8aff; color: #fff; border: none;
-  padding: 8px 20px; border-radius: 6px; font-size: 11px;
-  cursor: pointer; font-weight: 600; width: 100%; margin-top: 10px;
-}
-.settings-btn:hover { background: #6a78ee; }
-.settings-saved { color: #00c853; font-size: 10px; text-align: center; margin-top: 8px; display: none; }
-.settings-note { color: #555; font-size: 10px; margin-top: 4px; }
-
-/* Shell (xterm) */
+/* ── Shell (xterm) ── */
 .shell-container { flex: 1; display: flex; flex-direction: column; height: 100%; }
-.shell-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #16162a; border-bottom: 1px solid #2a2a4a; -webkit-app-region: no-drag; }
-.shell-toolbar button { background: #2a2a4a; color: #ccc; border: none; padding: 4px 10px; border-radius: 4px; font-size: 10px; cursor: pointer; }
-.shell-toolbar button:hover { background: #3a3a5a; }
-.shell-toolbar .shell-status { color: #666; font-size: 10px; margin-left: auto; }
+.shell-bar {
+  display: flex; align-items: center; gap: 6px; padding: 8px 14px;
+  background: var(--bg-elevated); border-bottom: 1px solid var(--separator);
+  -webkit-app-region: no-drag;
+}
+.shell-btn {
+  background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--separator);
+  padding: 4px 10px; border-radius: var(--radius-sm); font-size: 11px;
+  cursor: pointer; font-family: inherit; transition: all 0.15s;
+}
+.shell-btn:hover { background: var(--bg-tertiary); color: var(--text); }
+.shell-btn:disabled { opacity: 0.3; cursor: default; }
+.shell-status { margin-left: auto; font-size: 11px; }
 #xterm-container { flex: 1; padding: 4px; }
 #xterm-container .xterm { height: 100%; }
 
-/* Empty state */
-.empty { text-align: center; padding: 40px 20px; color: #444; font-size: 12px; }
+/* ── Files ── */
+.files-toolbar {
+  display: flex; align-items: center; gap: 6px; padding: 8px 14px;
+  background: var(--bg-elevated); border-bottom: 1px solid var(--separator);
+  -webkit-app-region: no-drag;
+}
+.files-path {
+  flex: 1; font-family: "SF Mono", Menlo, monospace; font-size: 11px;
+  color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.files-btn {
+  background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--separator);
+  padding: 4px 8px; border-radius: var(--radius-sm); font-size: 11px;
+  cursor: pointer; font-family: inherit; transition: all 0.15s;
+}
+.files-btn:hover { background: var(--bg-tertiary); color: var(--text); }
+.file-row { gap: 10px; }
+.file-icon { font-size: 18px; width: 24px; text-align: center; flex-shrink: 0; }
+.file-info { flex: 1; min-width: 0; }
+.file-name {
+  font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.file-name.dir { color: var(--accent); }
+.file-meta { font-size: 10px; color: var(--text-tertiary); margin-top: 1px; }
+.file-size { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; }
+
+/* ── Settings ── */
+.settings { padding: 12px; -webkit-app-region: no-drag; }
+.settings-section {
+  background: var(--bg-elevated); border-radius: var(--radius);
+  padding: 14px; margin-bottom: 10px;
+}
+.settings-label {
+  font-size: 11px; color: var(--text-secondary); font-weight: 500;
+  margin-bottom: 6px;
+}
+.settings-input {
+  width: 100%; background: var(--bg-secondary); border: 1px solid var(--separator);
+  color: var(--text); padding: 8px 10px; border-radius: var(--radius-sm);
+  font-size: 12px; outline: none; font-family: "SF Mono", Menlo, monospace;
+  margin-bottom: 12px;
+}
+.settings-input:last-child { margin-bottom: 0; }
+.settings-input:focus { border-color: var(--accent); }
+.settings-input::placeholder { color: var(--text-tertiary); }
+.settings-note { font-size: 10px; color: var(--text-tertiary); margin-top: -8px; margin-bottom: 12px; }
+.settings-save {
+  width: 100%; background: var(--accent); color: #fff; border: none;
+  padding: 10px; border-radius: var(--radius-sm); font-size: 13px;
+  font-weight: 600; cursor: pointer; font-family: inherit;
+  transition: background 0.15s;
+}
+.settings-save:hover { background: var(--accent-hover); }
+.settings-saved { color: var(--green); font-size: 11px; text-align: center; margin-top: 8px; display: none; }
+
+/* ── Empty state ── */
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 48px 24px; color: var(--text-tertiary); gap: 8px;
+}
+.empty-icon { font-size: 32px; opacity: 0.5; }
+.empty-text { font-size: 13px; }
+
+/* ── Loading ── */
+.loading { text-align: center; padding: 20px; color: var(--text-tertiary); font-size: 12px; }
 </style>
 </head>
 <body>
