@@ -69,12 +69,11 @@ function render() {
   if (isDetached) {
     app.innerHTML = `
       <div class="detached-titlebar">
-        <select class="device-select" id="global-device" style="margin-left:72px">
+        <select class="device-select" id="global-device" style="margin-left:72px;font-size:13px;font-weight:500;color:var(--text)">
           <option value="">No device</option>
           ${state.devices.map(d => `<option value="${esc(d.id)}" ${d.id === state.selectedDevice ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}
         </select>
         <span style="flex:1"></span>
-        <span style="font-size:12px;color:var(--text-secondary)">${state.tab.charAt(0).toUpperCase() + state.tab.slice(1)}</span>
       </div>
       <div class="content" id="content-area" style="height:calc(100vh - 40px)">${content}</div>
     `;
@@ -83,13 +82,12 @@ function render() {
       <div class="titlebar">
         <div class="titlebar-left">
           <div class="status-indicator ${state.connected ? 'on' : 'off'}" id="conn-toggle" title="${state.connected ? 'Connected' : 'Disconnected'}"></div>
-          <span class="titlebar-title">RemoteClaw</span>
-        </div>
-        <div class="titlebar-right">
-          <select class="device-select" id="global-device">
-            <option value="">No device</option>
+          <select class="device-select device-title" id="global-device">
+            <option value="">RemoteClaw</option>
             ${state.devices.map(d => `<option value="${esc(d.id)}" ${d.id === state.selectedDevice ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}
           </select>
+        </div>
+        <div class="titlebar-right">
           ${state.pinned ? '<button class="pin-close" id="pin-close" title="Close">✕</button>' : ''}
         </div>
       </div>
