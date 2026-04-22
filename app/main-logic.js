@@ -298,7 +298,7 @@ ipcMain.handle("open-preview", (_, { file, device, title }) => {
   return { ok: true };
 });
 
-ipcMain.handle("open-editor", (_, { dir, file, device, title }) => {
+ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
   const { BrowserWindow } = require("electron");
   const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
   const win = new BrowserWindow({
@@ -312,7 +312,7 @@ ipcMain.handle("open-editor", (_, { dir, file, device, title }) => {
   if (dir) url.searchParams.set("dir", dir);
   if (file) url.searchParams.set("file", file);
   if (device) url.searchParams.set("device", device);
-  win.loadURL(url.toString());
+  try { await win.loadURL(url.toString()); } catch(e) { console.error("editor load failed:", e.message); }
   trackIndependentWindow(win);
   return { ok: true };
 });
