@@ -231,7 +231,8 @@ function initShellTab() {
   });
   xterm.focus();
 
-  if (state.shellStatus === 'closed' && state.selectedDevice) openShellSession();
+  // Don't auto-connect; wait for user to click Connect
+  // if (state.shellStatus === 'closed' && state.selectedDevice) openShellSession();
 
   const connectBtn = document.getElementById('shell-connect');
   if (connectBtn) connectBtn.addEventListener('click', openShellSession);
@@ -597,7 +598,9 @@ api.on('shell-data', (msg) => {
   if (state.shellStatus === 'connecting') {
     state.shellStatus = 'open';
     clearTimeout(shellConnectTimeout);
-    updateShellStatus();
+    // Remove overlay without full re-render (preserves xterm)
+    const overlay = document.querySelector('.shell-overlay');
+    if (overlay) overlay.remove();
   }
   if (xterm) {
     try { xterm.write(decodeURIComponent(escape(atob(msg.data)))); }
@@ -609,7 +612,15 @@ api.on('shell-exit', (msg) => {
   if (msg.sessionId !== state.shellSessionId) return;
   state.shellStatus = 'closed'; state.shellSessionId = null;
   if (xterm) xterm.writeln(`\r\n\x1b[90mShell exited (code ${msg.exitCode})\x1b[0m`);
-  updateShellStatus();
+  // Add overlay without full re-render
+  const container = document.querySelector('.shell-container');
+  if (container && !document.querySelector('.shell-overlay')) {
+    const overlay = document.createElement('div');
+    overlay.className = 'shell-overlay';
+    overlay.innerHTML = `<div class="shell-overlay-content"><div class="shell-overlay-status" style="color:var(--text-tertiary)">Disconnected</div><button class="shell-overlay-btn" id="shell-connect">Connect</button></div>`;
+    container.appendChild(overlay);
+    overlay.querySelector('#shell-connect')?.addEventListener('click', openShellSession);
+  }
 });
 
 // ── Init ──
