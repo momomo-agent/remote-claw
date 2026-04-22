@@ -86,7 +86,11 @@ function connect() {
 function execCommand(taskId, command) {
   console.log(`[${taskId.slice(0, 8)}] exec: ${command}`);
   const proc = spawn("sh", ["-c", command], {
-    env: { ...process.env, HOME: os.homedir() },
+    env: {
+      ...process.env,
+      HOME: os.homedir(),
+      PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}`,
+    },
     timeout: 60000,
   });
 
