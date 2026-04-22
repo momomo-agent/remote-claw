@@ -86,7 +86,8 @@ let manualDisconnect = false;
 // ── Daemon WS ──
 
 function connectDaemon() {
-  const url = `${config.server}/ws?device=${encodeURIComponent(config.deviceName)}&token=${encodeURIComponent(config.token)}&capabilities=${encodeURIComponent(config.capabilities.join(","))}`;
+  const appDeviceId = `app-${config.deviceName || os.hostname()}`;
+  const url = `${config.server}/ws?device=${encodeURIComponent(appDeviceId)}&token=${encodeURIComponent(config.token)}&capabilities=`;
   daemonWs = new WebSocket(url);
 
   daemonWs.on("open", () => {
