@@ -54,16 +54,23 @@ function hubStub(env: Env): DurableObjectStub {
 }
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    };
+
     // CORS preflight
     if (req.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Authorization, Content-Type",
-        },
-      });
+      return new Response(null, { headers: corsHeaders });
     }
+
+    // Helper to add CORS to any response
+    const withCors = (res: Response) => {
+      const newRes = new Response(res.body, res);
+      Object.entries(corsHeaders).forEach(([k, v]) => newRes.headers.set(k, v));
+      return newRes;
+    };
 
     const url = new URL(req.url);
     const path = url.pathname;
@@ -83,18 +90,18 @@ export default {
 
     // GET /devices
     if (path === "/devices" && req.method === "GET") {
-      return hubStub(env).fetch(req);
+      return withCors(await hubStub(env).fetch(req));
     }
 
     // POST /exec
     if (path === "/exec" && req.method === "POST") {
-      return hubStub(env).fetch(req);
+      return withCors(await hubStub(env).fetch(req));
     }
 
     // GET /task/:id
     const taskMatch = path.match(/^\/task\/(.+)$/);
     if (taskMatch && req.method === "GET") {
-      return hubStub(env).fetch(req);
+      return withCors(await hubStub(env).fetch(req));
     }
 
     // GET /history
@@ -112,24 +119,24 @@ export default {
 
     // POST /transfer/upload — upload file in chunks, stored in DO SQLite
     if (path === "/transfer/upload" && req.method === "POST") {
-      return hubStub(env).fetch(req);
+      return withCors(await hubStub(env).fetch(req));
     }
 
     // GET /transfer/download/:id — download file chunks
     const dlMatch = path.match(/^\/transfer\/download\/(.+)$/);
     if (dlMatch && req.method === "GET") {
-      return hubStub(env).fetch(req);
+      return withCors(await hubStub(env).fetch(req));
     }
 
     // GET /transfer/info/:id — get transfer metadata
     const infoMatch = path.match(/^\/transfer\/info\/(.+)$/);
     if (infoMatch && req.method === "GET") {
-      return hubStub(env).fetch(req);
+      return withCors(await hubStub(env).fetch(req));
     }
 
     // POST /transfer/push — tell a device to upload a file
     if (path === "/transfer/push" && req.method === "POST") {
-      return hubStub(env).fetch(req);
+      return withCors(await hubStub(env).fetch(req));
     }
 
     return err("not found", 404);
