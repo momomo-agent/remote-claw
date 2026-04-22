@@ -1,0 +1,29 @@
+{
+  "name": "remote-claw-app",
+  "version": "1.0.0",
+  "description": "RemoteClaw - Remote device control",
+  "author": "kenefe",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac"
+  },
+  "dependencies": {
+    "menubar": "^9.5.0",
+    "electron-store": "^8.2.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.0"
+  },
+  "build": {
+    "appId": "dev.momomo.remoteclaw",
+    "productName": "RemoteClaw",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": "dmg"
+    }
+  }
+}

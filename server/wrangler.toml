@@ -1,0 +1,20 @@
+name = "remote-claw"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "production"
+
+[[kv_namespaces]]
+binding = "HISTORY"
+id = "238d8346bd874345b589d357b94c4fb6"
+
+[durable_objects]
+bindings = [
+  { name = "DEVICE_HUB", class_name = "DeviceHub" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DeviceHub"]

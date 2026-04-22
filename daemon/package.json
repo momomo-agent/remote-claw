@@ -1,0 +1,7 @@
+{
+  "name": "remote-claw-daemon",
+  "private": true,
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
