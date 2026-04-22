@@ -309,6 +309,7 @@ function renderFiles() {
       <button class="files-btn" id="files-up" title="Go up">↑</button>
       <div class="files-path">${state.filesPath === '~' ? '~' : breadcrumb || '/'}</div>
       <button class="files-btn" id="files-refresh" title="Refresh">↻</button>
+      <button class="files-btn" id="files-editor" title="Open in Editor">✎ Code</button>
     </div>
     ${body}
   `;
@@ -472,6 +473,11 @@ function bindEvents() {
   const filesRefresh = document.getElementById('files-refresh');
   if (filesRefresh) filesRefresh.addEventListener('click', () => loadFiles(state.filesPath));
 
+  const filesEditor = document.getElementById('files-editor');
+  if (filesEditor) filesEditor.addEventListener('click', () => {
+    api.invoke('open-editor', { dir: state.filesPath, device: state.selectedDevice });
+  });
+
   document.querySelectorAll('.file-row[data-isdir="true"]').forEach(el => {
     el.addEventListener('click', () => {
       const name = el.dataset.file;
@@ -488,7 +494,7 @@ function bindEvents() {
       const ext = name.split('.').pop()?.toLowerCase();
       const previewable = ['md','markdown','txt','json','js','ts','py','sh','yml','yaml','swift','m','h','c','cpp','css','html','xml','toml','ini','conf','log'];
       if (previewable.includes(ext)) {
-        api.invoke('open-preview', { file: fullPath, device: state.selectedDevice, title: name });
+        api.invoke('open-editor', { dir: state.filesPath, file: fullPath, device: state.selectedDevice, title: name });
       }
     });
   });

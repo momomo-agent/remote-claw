@@ -283,6 +283,24 @@ ipcMain.handle("open-preview", (_, { file, device, title }) => {
   return { ok: true };
 });
 
+ipcMain.handle("open-editor", (_, { dir, file, device, title }) => {
+  const { BrowserWindow } = require("electron");
+  const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
+  const win = new BrowserWindow({
+    width: 1100, height: 700, minWidth: 700, minHeight: 500,
+    title: title || "RemoteClaw Editor",
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 12, y: 12 },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
+  });
+  const url = new URL(CLOUD_URL + "editor.html");
+  if (dir) url.searchParams.set("dir", dir);
+  if (file) url.searchParams.set("file", file);
+  if (device) url.searchParams.set("device", device);
+  win.loadURL(url.toString());
+  return { ok: true };
+});
+
 // ── IPC: Filesystem ──
 
 ipcMain.handle("read-file", async (_, p) => { try { return { data: fs.readFileSync(p, "utf-8") }; } catch (e) { return { error: e.message }; } });
