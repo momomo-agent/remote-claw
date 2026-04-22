@@ -18,6 +18,15 @@ interface Task {
   completedAt: number | null;
 }
 
+interface Transfer {
+  id: string;
+  filename: string;
+  totalSize: number;
+  chunks: number;
+  createdAt: number;
+  expiresAt: number;
+}
+
 // ── Helpers ──
 
 function json(data: unknown, status = 200) {
@@ -101,6 +110,28 @@ export default {
       return json(items.filter(Boolean));
     }
 
+    // POST /transfer/upload — upload file in chunks, stored in DO SQLite
+    if (path === "/transfer/upload" && req.method === "POST") {
+      return hubStub(env).fetch(req);
+    }
+
+    // GET /transfer/download/:id — download file chunks
+    const dlMatch = path.match(/^\/transfer\/download\/(.+)$/);
+    if (dlMatch && req.method === "GET") {
+      return hubStub(env).fetch(req);
+    }
+
+    // GET /transfer/info/:id — get transfer metadata
+    const infoMatch = path.match(/^\/transfer\/info\/(.+)$/);
+    if (infoMatch && req.method === "GET") {
+      return hubStub(env).fetch(req);
+    }
+
+    // POST /transfer/push — tell a device to upload a file
+    if (path === "/transfer/push" && req.method === "POST") {
+      return hubStub(env).fetch(req);
+    }
+
     return err("not found", 404);
   },
 };
@@ -119,9 +150,37 @@ export class DeviceHub {
   private tasks = new Map<string, Task>();
   private taskResolvers = new Map<string, (t: Task) => void>();
   private env: Env;
+  private sql: SqlStorage;
 
   constructor(private state: DurableObjectState, env: Env) {
     this.env = env;
+    this.sql = state.storage.sql;
+    // Create transfer tables
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS transfers (
+        id TEXT PRIMARY KEY,
+        filename TEXT,
+        total_size INTEGER,
+        chunks INTEGER DEFAULT 0,
+        created_at INTEGER,
+        expires_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS transfer_chunks (
+        transfer_id TEXT,
+        chunk_index INTEGER,
+        data TEXT,
+        PRIMARY KEY (transfer_id, chunk_index)
+      );
+    `);
+    // Cleanup expired transfers every 5 minutes
+    state.storage.setAlarm(Date.now() + 300000);
+  }
+
+  async alarm() {
+    const now = Date.now();
+    this.sql.exec(`DELETE FROM transfer_chunks WHERE transfer_id IN (SELECT id FROM transfers WHERE expires_at < ?)`, now);
+    this.sql.exec(`DELETE FROM transfers WHERE expires_at < ?`, now);
+    this.state.storage.setAlarm(Date.now() + 300000);
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -222,6 +281,59 @@ export class DeviceHub {
       const task = this.tasks.get(taskMatch[1]);
       if (!task) return err("task not found", 404);
       return json(task);
+    }
+
+    // ── File Transfer ──
+
+    // POST /transfer/upload — receive file as base64 chunks
+    if (path === "/transfer/upload" && req.method === "POST") {
+      const body = await req.json() as { filename: string; chunk: string; chunkIndex: number; totalChunks: number; totalSize: number; transferId?: string };
+      let transferId = body.transferId;
+      if (!transferId) {
+        transferId = crypto.randomUUID();
+        this.sql.exec(
+          `INSERT INTO transfers (id, filename, total_size, chunks, created_at, expires_at) VALUES (?, ?, ?, 0, ?, ?)`,
+          transferId, body.filename, body.totalSize, Date.now(), Date.now() + 300000
+        );
+      }
+      this.sql.exec(
+        `INSERT OR REPLACE INTO transfer_chunks (transfer_id, chunk_index, data) VALUES (?, ?, ?)`,
+        transferId, body.chunkIndex, body.chunk
+      );
+      this.sql.exec(`UPDATE transfers SET chunks = chunks + 1 WHERE id = ?`, transferId);
+      const row = this.sql.exec(`SELECT chunks FROM transfers WHERE id = ?`, transferId).toArray()[0] as any;
+      const done = row && row.chunks >= body.totalChunks;
+      return json({ transferId, chunksReceived: row?.chunks || 0, done });
+    }
+
+    // GET /transfer/info/:id
+    const infoMatch = path.match(/^\/transfer\/info\/(.+)$/);
+    if (infoMatch) {
+      const rows = this.sql.exec(`SELECT * FROM transfers WHERE id = ?`, infoMatch[1]).toArray();
+      if (!rows.length) return err("transfer not found", 404);
+      return json(rows[0]);
+    }
+
+    // GET /transfer/download/:id?chunk=N — download one chunk at a time
+    const dlMatch = path.match(/^\/transfer\/download\/(.+)$/);
+    if (dlMatch) {
+      const chunkIdx = parseInt(url.searchParams.get("chunk") || "0");
+      const rows = this.sql.exec(
+        `SELECT data FROM transfer_chunks WHERE transfer_id = ? AND chunk_index = ?`,
+        dlMatch[1], chunkIdx
+      ).toArray();
+      if (!rows.length) return err("chunk not found", 404);
+      return json({ chunk: (rows[0] as any).data, chunkIndex: chunkIdx });
+    }
+
+    // POST /transfer/push — tell device to read file and upload it
+    if (path === "/transfer/push" && req.method === "POST") {
+      const body = await req.json() as { device: string; remotePath: string };
+      const conn = this.devices.get(body.device);
+      if (!conn) return err("device not connected", 404);
+      const transferId = crypto.randomUUID();
+      conn.ws.send(JSON.stringify({ type: "file-upload", transferId, path: body.remotePath }));
+      return json({ transferId, status: "requested" });
     }
 
     return err("not found", 404);

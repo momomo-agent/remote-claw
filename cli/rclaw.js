@@ -7,6 +7,7 @@ const SERVER = "https://remote.momomo.dev";
 const TOKEN = "rclaw-4847bbe08bda2c785f4e4e6bc05e4815";
 const PROXY_HOST = "127.0.0.1";
 const PROXY_PORT = 7890;
+const CHUNK_SIZE = 512 * 1024; // 512KB per chunk
 
 function api(method, path, body) {
   return new Promise((resolve, reject) => {
@@ -47,6 +48,8 @@ Usage:
   rclaw exec <device> -a <command>  Execute command (async, returns taskId)
   rclaw task <taskId>               Check async task status
   rclaw shell [device]               Interactive shell (TUI)
+  rclaw push <local-file> <device>:<remote-path>   Push file to device
+  rclaw pull <device>:<remote-path> <local-file>   Pull file from device
   rclaw history [limit]             Command history`);
     return;
   }
@@ -110,6 +113,16 @@ Usage:
 
   if (cmd === "shell" || cmd === "s") {
     await shell(args[1]);
+    return;
+  }
+
+  if (cmd === "push") {
+    await pushFile(args[1], args[2]);
+    return;
+  }
+
+  if (cmd === "pull") {
+    await pullFile(args[1], args[2]);
     return;
   }
 
@@ -184,3 +197,103 @@ async function shell(deviceArg) {
 }
 
 main().catch((e) => { console.error(e.message); process.exit(1); });
+
+// ── File Transfer ──
+
+async function pushFile(localPath, target) {
+  if (!localPath || !target || !target.includes(":")) {
+    console.error("Usage: rclaw push <local-file> <device>:<remote-path>");
+    process.exit(1);
+  }
+  const [device, remotePath] = [target.split(":")[0], target.split(":").slice(1).join(":")];
+  const fs = require("fs");
+  const path = require("path");
+
+  if (!fs.existsSync(localPath)) { console.error(`File not found: ${localPath}`); process.exit(1); }
+  const stat = fs.statSync(localPath);
+  const totalSize = stat.size;
+  const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
+  const filename = path.basename(localPath);
+
+  console.log(`Pushing ${filename} (${(totalSize / 1024 / 1024).toFixed(1)}MB) to ${device}:${remotePath}`);
+  console.log(`${totalChunks} chunks @ ${CHUNK_SIZE / 1024}KB each`);
+
+  // Upload chunks to Worker
+  const fd = fs.openSync(localPath, "r");
+  const buf = Buffer.alloc(CHUNK_SIZE);
+  let transferId = null;
+
+  for (let i = 0; i < totalChunks; i++) {
+    const bytesRead = fs.readSync(fd, buf, 0, CHUNK_SIZE, i * CHUNK_SIZE);
+    const chunk = buf.slice(0, bytesRead).toString("base64");
+    const { data } = await api("POST", "/transfer/upload", {
+      filename, chunk, chunkIndex: i, totalChunks, totalSize,
+      transferId: transferId || undefined,
+    });
+    if (data.error) { console.error("Upload error:", data.error); process.exit(1); }
+    if (!transferId) transferId = data.transferId;
+    process.stdout.write(`\r  chunk ${i + 1}/${totalChunks}`);
+  }
+  fs.closeSync(fd);
+  console.log("\n  uploaded to relay.");
+
+  // Tell target device to download from relay
+  const { data: devicesData } = await api("GET", "/devices");
+  const conn = Array.isArray(devicesData) && devicesData.find(d => d.name === device || d.id === device);
+  if (!conn) { console.error(`Device ${device} not connected. Transfer ${transferId} available for 5 min.`); return; }
+
+  // Send download command via exec
+  const { data: execData } = await api("POST", "/exec", {
+    device, command: `__RCLAW_DOWNLOAD__ ${transferId} ${remotePath} ${totalChunks}`, oneshot: false, timeout: 300000,
+  });
+  console.log(`  download requested on ${device} (task: ${execData.taskId || "sent"})`);
+  console.log(`  transfer: ${transferId}`);
+}
+
+async function pullFile(source, localPath) {
+  if (!source || !source.includes(":") || !localPath) {
+    console.error("Usage: rclaw pull <device>:<remote-path> <local-file>");
+    process.exit(1);
+  }
+  const [device, remotePath] = [source.split(":")[0], source.split(":").slice(1).join(":")];
+  const fs = require("fs");
+  const path = require("path");
+
+  console.log(`Pulling ${device}:${remotePath} -> ${localPath}`);
+
+  // Tell device to upload the file
+  const { data } = await api("POST", "/transfer/push", { device, remotePath });
+  if (data.error) { console.error("Error:", data.error); process.exit(1); }
+  const transferId = data.transferId;
+  console.log(`  upload requested (transfer: ${transferId})`);
+
+  // Poll until transfer is complete
+  let info;
+  for (let attempt = 0; attempt < 120; attempt++) {
+    await new Promise(r => setTimeout(r, 2000));
+    const { data: infoData } = await api("GET", `/transfer/info/${transferId}`);
+    if (infoData.error) continue;
+    info = infoData;
+    if (info.chunks > 0 && info.chunks >= Math.ceil(info.total_size / CHUNK_SIZE)) break;
+    process.stdout.write(`\r  waiting... ${info.chunks || 0} chunks`);
+  }
+
+  if (!info || !info.chunks) { console.error("\n  Transfer timed out or failed"); process.exit(1); }
+  const totalChunks = Math.ceil(info.total_size / CHUNK_SIZE);
+  console.log(`\n  downloading ${totalChunks} chunks...`);
+
+  // Download chunks
+  const dir = path.dirname(localPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const fd = fs.openSync(localPath, "w");
+
+  for (let i = 0; i < totalChunks; i++) {
+    const { data: chunkData } = await api("GET", `/transfer/download/${transferId}?chunk=${i}`);
+    if (chunkData.error) { console.error(`\n  chunk ${i} error: ${chunkData.error}`); process.exit(1); }
+    const buf = Buffer.from(chunkData.chunk, "base64");
+    fs.writeSync(fd, buf, 0, buf.length);
+    process.stdout.write(`\r  chunk ${i + 1}/${totalChunks}`);
+  }
+  fs.closeSync(fd);
+  console.log(`\n  done: ${localPath} (${(info.total_size / 1024 / 1024).toFixed(1)}MB)`);
+}
