@@ -200,7 +200,7 @@ body {
 .term-input::placeholder { color: var(--text-tertiary); }
 
 /* ── Shell (xterm) ── */
-.shell-container { flex: 1; display: flex; flex-direction: column; height: 100%; }
+.shell-container { flex: 1; display: flex; flex-direction: column; height: 100%; position: relative; }
 .shell-bar {
   display: flex; align-items: center; gap: 8px; padding: 10px 16px;
   background: var(--bg-raised); border-bottom: 1px solid var(--border);
@@ -219,6 +219,24 @@ body {
 .shell-status { margin-left: auto; font-size: 11px; font-weight: 500; }
 #xterm-container { flex: 1; padding: 4px; }
 #xterm-container .xterm { height: 100%; }
+
+/* Shell overlay (disconnected state) */
+.shell-overlay {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(22,22,24,0.85); backdrop-filter: blur(8px);
+  z-index: 10;
+}
+.shell-overlay-content { text-align: center; }
+.shell-overlay-status { font-size: 13px; font-weight: 500; margin-bottom: 12px; }
+.shell-overlay-btn {
+  background: var(--accent); color: #fff; border: none;
+  padding: 8px 24px; border-radius: var(--radius-xs); font-size: 13px;
+  font-weight: 600; cursor: pointer; font-family: var(--font);
+  transition: all 0.2s ease; letter-spacing: -0.01em;
+}
+.shell-overlay-btn:hover { filter: brightness(1.1); }
+.shell-overlay-btn:active { transform: scale(0.97); }
 
 /* ── Files ── */
 .files-toolbar {

@@ -178,12 +178,15 @@ function renderShell() {
   const statusColor = state.shellStatus === 'open' ? 'var(--green)' : state.shellStatus === 'connecting' ? 'var(--orange)' : 'var(--text-tertiary)';
   return `
     <div class="shell-container">
-      <div class="shell-bar">
-        <button class="shell-btn" id="shell-connect">${state.shellStatus === 'closed' ? 'Connect' : 'Reconnect'}</button>
-        <button class="shell-btn" id="shell-disconnect" ${state.shellStatus === 'closed' ? 'disabled' : ''}>Disconnect</button>
-        <span class="shell-status" style="color:${statusColor}">${statusText}</span>
-      </div>
       <div id="xterm-container"></div>
+      ${state.shellStatus !== 'open' ? `
+        <div class="shell-overlay">
+          <div class="shell-overlay-content">
+            <div class="shell-overlay-status" style="color:${statusColor}">${statusText}</div>
+            ${state.shellStatus === 'closed' ? '<button class="shell-overlay-btn" id="shell-connect">Connect</button>' : ''}
+          </div>
+        </div>
+      ` : ''}
     </div>
   `;
 }
@@ -231,9 +234,7 @@ function initShellTab() {
   if (state.shellStatus === 'closed' && state.selectedDevice) openShellSession();
 
   const connectBtn = document.getElementById('shell-connect');
-  const disconnectBtn = document.getElementById('shell-disconnect');
   if (connectBtn) connectBtn.addEventListener('click', openShellSession);
-  if (disconnectBtn) disconnectBtn.addEventListener('click', closeShellSession);
 }
 
 function openShellSession() {
