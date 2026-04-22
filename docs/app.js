@@ -480,6 +480,19 @@ function bindEvents() {
     });
   });
 
+  // Click file to preview
+  document.querySelectorAll('.file-row[data-isdir="false"]').forEach(el => {
+    el.addEventListener('click', () => {
+      const name = el.dataset.file;
+      const fullPath = state.filesPath + '/' + name;
+      const ext = name.split('.').pop()?.toLowerCase();
+      const previewable = ['md','markdown','txt','json','js','ts','py','sh','yml','yaml','swift','m','h','c','cpp','css','html','xml','toml','ini','conf','log'];
+      if (previewable.includes(ext)) {
+        api.invoke('open-preview', { file: fullPath, device: state.selectedDevice, title: name });
+      }
+    });
+  });
+
   document.querySelectorAll('[data-nav]').forEach(el => {
     el.addEventListener('click', (e) => { e.stopPropagation(); loadFiles(el.dataset.nav); });
   });
