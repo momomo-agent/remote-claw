@@ -541,7 +541,7 @@ ipcMain.handle("eval", async (_, { code }) => {
   } catch (e) { return { ok: false, error: e.message, stack: e.stack }; }
 });
 
-const CLOUD_URL = "https://remote.momomo.dev/app";
+const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
 const LOCAL_URL = `file://${path.join(__dirname, "renderer", "index.html")}`;
 
 app.on("ready", () => {
@@ -568,6 +568,56 @@ app.on("ready", () => {
 
   mb.on("ready", () => {
     connectDaemon();
+
+    // Right-click context menu on tray
+    const { Menu } = require("electron");
+    let trayMenu = Menu.buildFromTemplate([
+      { label: "Show", click: () => mb.showWindow() },
+      { label: "Devices", click: () => { mb.showWindow(); sendToRenderer("navigate-tab", "devices"); } },
+      { label: "Terminal", click: () => { mb.showWindow(); sendToRenderer("navigate-tab", "terminal"); } },
+      { type: "separator" },
+      { label: "Connect", type: "checkbox", checked: daemonConnected, click: (item) => {
+        if (daemonConnected || daemonWs) {
+          manualDisconnect = true;
+          if (daemonWs) { daemonWs.removeAllListeners("close"); daemonWs.close(); daemonWs = null; }
+          daemonConnected = false;
+          if (mb?.tray) mb.tray.setImage(createTrayIcon(false));
+          sendToRenderer("daemon-status", { connected: false });
+          item.checked = false;
+        } else {
+          manualDisconnect = false;
+          connectDaemon();
+          item.checked = true;
+        }
+      }},
+      { type: "separator" },
+      { label: "Quit", click: () => { app.quit(); } },
+    ]);
+    mb.tray.on("right-click", () => {
+      // Update connect checkbox state
+      trayMenu.items[4].checked = daemonConnected;
+      mb.tray.popUpContextMenu(trayMenu);
+    });
+
+    // IPC to update tray menu from cloud UI
+    ipcMain.handle("tray-set-menu", (_, { items }) => {
+      const template = items.map(item => {
+        if (item.type === "separator") return { type: "separator" };
+        return {
+          label: item.label,
+          type: item.type || "normal",
+          checked: item.checked,
+          enabled: item.enabled !== false,
+          click: () => sendToRenderer("tray-menu-click", { id: item.id }),
+        };
+      });
+      // Always append Quit
+      template.push({ type: "separator" });
+      template.push({ label: "Quit", click: () => app.quit() });
+      trayMenu = Menu.buildFromTemplate(template);
+      return { ok: true };
+    });
+
     mb.on("show", () => {
       sendToRenderer("refresh", {});
       // Record tray position when shown normally

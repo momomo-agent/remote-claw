@@ -44,131 +44,297 @@ function hubStub(env: Env): DurableObjectStub {
   return env.DEVICE_HUB.get(id);
 }
 
-// ── App HTML (served at /app for hot-update) ──
+const api = window.electronAPI;
 
-const APP_HTML = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>RemoteClaw</title>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #1a1a2e; }
-::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-  background: #0f0f1a; color: #e0e0e0; font-size: 12px;
-  overflow: hidden; user-select: none; -webkit-app-region: drag;
+let state = {
+  tab: "terminal",
+  connected: false,
+  serverUrl: "",
+  devices: [],
+  history: [],
+  selectedDevice: "",
+  cmdText: "",
+  executing: false,
+  terminalLines: [],
+  terminalInput: "",
+  configRaw: null,
+  pinned: false,
+};
+
+function formatDuration(seconds) {
+  if (seconds < 60) return \`\${seconds}s\`;
+  if (seconds < 3600) return \`\${Math.floor(seconds / 60)}m\`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return \`\${h}h\${m}m\`;
 }
-#app { display: flex; flex-direction: column; height: 100vh; }
-.header {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; background: #16162a;
-  border-bottom: 1px solid #2a2a4a; -webkit-app-region: drag;
+
+function formatTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.status-dot.on { background: #00c853; box-shadow: 0 0 6px #00c85388; }
-.status-dot.off { background: #ff3d3d; box-shadow: 0 0 6px #ff3d3d88; }
-.header-url { color: #888; font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.device-picker {
-  background: #1a1a30; border: 1px solid #2a2a4a; color: #ccc;
-  padding: 3px 6px; border-radius: 4px; font-size: 10px; outline: none;
+
+function render() {
+  const app = document.getElementById("app");
+  const content = state.tab === "devices" ? renderDevices()
+    : state.tab === "history" ? renderHistory()
+    : state.tab === "settings" ? renderSettings()
+    : renderTerminal();
+
+  app.innerHTML = \`
+    \${state.pinned ? '<div class="pin-close-btn" id="pin-close">✕</div>' : ''}
+    <div class="header">
+      <div class="status-dot \${state.connected ? "on" : "off"}" id="conn-toggle" style="cursor:pointer" title="Click to \${state.connected ? 'disconnect' : 'connect'}"></div>
+      <div class="header-url">\${state.serverUrl || "..."}</div>
+      <select class="device-picker" id="global-device">
+        <option value="">no device</option>
+        \${state.devices.map(d => \`<option value="\${d.id}" \${d.id === state.selectedDevice ? "selected" : ""}>\${d.name}</option>\`).join("")}
+      </select>
+    </div>
+    <div class="tabs">
+      <div class="tab \${state.tab === "terminal" ? "active" : ""}" data-tab="terminal">Terminal</div>
+      <div class="tab \${state.tab === "devices" ? "active" : ""}" data-tab="devices">Devices</div>
+      <div class="tab \${state.tab === "history" ? "active" : ""}" data-tab="history">History</div>
+      <div class="tab \${state.tab === "settings" ? "active" : ""}" data-tab="settings">⚙</div>
+    </div>
+    <div class="content" id="content-area">
+      \${content}
+    </div>
+  \`;
+  bindEvents();
 }
-.tabs {
-  display: flex; background: #16162a;
-  border-bottom: 1px solid #2a2a4a; -webkit-app-region: no-drag;
+
+function renderTerminal() {
+  const lines = state.terminalLines.map(l => {
+    if (l.type === "cmd") return \`<div class="term-line term-cmd"><span class="term-prompt">\${escHtml(state.selectedDevice || "?")}$</span> \${escHtml(l.text)}</div>\`;
+    if (l.type === "stdout") return \`<div class="term-line term-stdout">\${escHtml(l.text)}</div>\`;
+    if (l.type === "stderr") return \`<div class="term-line term-stderr">\${escHtml(l.text)}</div>\`;
+    if (l.type === "info") return \`<div class="term-line term-info">\${escHtml(l.text)}</div>\`;
+    if (l.type === "error") return \`<div class="term-line term-error">\${escHtml(l.text)}</div>\`;
+    return \`<div class="term-line">\${escHtml(l.text)}</div>\`;
+  }).join("");
+
+  return \`
+    <div class="terminal" id="terminal">
+      <div class="term-output" id="term-output">\${lines}</div>
+      <div class="term-input-row">
+        <span class="term-prompt">\${escHtml(state.selectedDevice || "?")}$</span>
+        <input class="term-input" id="term-input" placeholder="\${state.selectedDevice ? "type a command..." : "select a device first"}"
+          value="\${escHtml(state.terminalInput)}" \${!state.selectedDevice || state.executing ? "disabled" : ""} />
+      </div>
+    </div>
+  \`;
 }
-.tab {
-  flex: 1; padding: 7px 0; text-align: center; cursor: pointer;
-  color: #666; font-size: 11px; font-weight: 500; transition: all 0.15s;
+
+function renderDevices() {
+  if (!state.devices.length) return \`<div class="empty">No devices online</div>\`;
+  return state.devices.map(d => \`
+    <div class="device-item" data-device="\${escHtml(d.id)}">
+      <div>
+        <div class="device-name">\${escHtml(d.name)}</div>
+        <div class="device-caps"></div>
+      </div>
+      <div class="device-time">
+        <div style="color:#00c853;font-size:10px">online</div>
+        <div>\${formatDuration(d.connectedFor || 0)}</div>
+      </div>
+    </div>
+  \`).join("");
 }
-.tab:hover { color: #aaa; }
-.tab.active { color: #7c8aff; border-bottom: 2px solid #7c8aff; }
-.content { flex: 1; overflow-y: auto; -webkit-app-region: no-drag; }
-.device-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; border-bottom: 1px solid #1a1a30; transition: background 0.1s;
+
+function renderHistory() {
+  if (!state.history.length) return \`<div class="empty">No command history</div>\`;
+  return state.history.map(h => \`
+    <div class="history-item">
+      <div class="history-cmd">\${escHtml(h.command)}</div>
+      <div class="history-meta">
+        <span>\${escHtml(h.device)}</span>
+        <span class="history-status \${h.status}">\${h.status}</span>
+        <span>\${h.duration ? (h.duration / 1000).toFixed(1) + "s" : ""}</span>
+        <span>\${formatTime(h.createdAt)}</span>
+      </div>
+    </div>
+  \`).join("");
 }
-.device-item:hover { background: #1a1a30; }
-.device-name { font-weight: 600; font-size: 12px; }
-.device-meta { color: #666; font-size: 10px; margin-top: 2px; }
-.device-caps { display: flex; gap: 4px; margin-top: 3px; }
-.cap-tag { background: #2a2a4a; color: #8888cc; font-size: 9px; padding: 1px 6px; border-radius: 3px; }
-.device-time { margin-left: auto; color: #555; font-size: 10px; text-align: right; }
-.history-item { padding: 8px 14px; border-bottom: 1px solid #1a1a30; }
-.history-cmd {
-  font-family: "SF Mono", Menlo, monospace; font-size: 11px;
-  color: #c8c8ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+
+function renderSettings() {
+  return \`
+    <div class="settings">
+      <div class="settings-group">
+        <div class="settings-label">Server</div>
+        <input class="settings-input" id="s-server" value="\${escHtml(state.configRaw?.server || '')}" placeholder="wss://remote.momomo.dev" />
+      </div>
+      <div class="settings-group">
+        <div class="settings-label">Token</div>
+        <input class="settings-input" id="s-token" type="password" value="\${escHtml(state.configRaw?.token || '')}" placeholder="rclaw-..." />
+      </div>
+      <div class="settings-group">
+        <div class="settings-label">Device Name</div>
+        <input class="settings-input" id="s-device" value="\${escHtml(state.configRaw?.deviceName || '')}" placeholder="auto-detected" />
+        <div class="settings-note">Leave empty for auto-detection</div>
+      </div>
+      <button class="settings-btn" id="s-save">Save & Reconnect</button>
+      <div class="settings-saved" id="s-saved">Saved!</div>
+    </div>
+  \`;
 }
-.history-meta { display: flex; gap: 8px; margin-top: 3px; color: #555; font-size: 10px; }
-.history-status { font-weight: 600; }
-.history-status.done { color: #00c853; }
-.history-status.error { color: #ff3d3d; }
-.history-status.timeout { color: #ff9800; }
-.history-status.running { color: #7c8aff; }
-.terminal { display: flex; flex-direction: column; height: 100%; }
-.term-output {
-  flex: 1; overflow-y: auto; padding: 8px 12px;
-  font-family: "SF Mono", Menlo, monospace; font-size: 11px; line-height: 1.5;
+
+function escHtml(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-.term-line { white-space: pre-wrap; word-break: break-all; }
-.term-cmd { color: #e0e0e0; margin-top: 4px; }
-.term-prompt { color: #7c8aff; margin-right: 6px; font-weight: 600; }
-.term-stdout { color: #c8c8c8; }
-.term-stderr { color: #ff6b6b; }
-.term-info { color: #555; font-size: 10px; }
-.term-error { color: #ff3d3d; }
-.term-input-row {
-  display: flex; align-items: center; padding: 8px 12px;
-  background: #16162a; border-top: 1px solid #2a2a4a;
-  -webkit-app-region: no-drag;
-  font-family: "SF Mono", Menlo, monospace; font-size: 11px;
+
+// Command history (up/down arrow)
+let cmdHistory = [];
+let cmdHistoryIdx = -1;
+
+function bindEvents() {
+  document.querySelectorAll(".tab").forEach(el => {
+    el.addEventListener("click", () => { state.tab = el.dataset.tab; render(); });
+  });
+
+  const gd = document.getElementById("global-device");
+  if (gd) gd.addEventListener("change", (e) => { state.selectedDevice = e.target.value; render(); });
+
+  // Terminal input
+  const ti = document.getElementById("term-input");
+  if (ti) {
+    ti.addEventListener("input", (e) => { state.terminalInput = e.target.value; });
+    ti.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { runTerminalCmd(); return; }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (cmdHistoryIdx < cmdHistory.length - 1) {
+          cmdHistoryIdx++;
+          state.terminalInput = cmdHistory[cmdHistory.length - 1 - cmdHistoryIdx];
+          ti.value = state.terminalInput;
+        }
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (cmdHistoryIdx > 0) {
+          cmdHistoryIdx--;
+          state.terminalInput = cmdHistory[cmdHistory.length - 1 - cmdHistoryIdx];
+          ti.value = state.terminalInput;
+        } else {
+          cmdHistoryIdx = -1;
+          state.terminalInput = "";
+          ti.value = "";
+        }
+      }
+      if (e.key === "l" && e.ctrlKey) {
+        e.preventDefault();
+        state.terminalLines = [];
+        render();
+      }
+    });
+    ti.focus();
+  }
+
+  // Click device to select
+  document.querySelectorAll(".device-item").forEach(el => {
+    el.addEventListener("click", () => {
+      state.selectedDevice = el.dataset.device;
+      state.tab = "terminal";
+      render();
+    });
+  });
+
+  // Settings save
+  const saveBtn = document.getElementById("s-save");
+  if (saveBtn) saveBtn.addEventListener("click", async () => {
+    const cfg = {
+      server: document.getElementById("s-server").value.trim() || "wss://remote.momomo.dev",
+      token: document.getElementById("s-token").value.trim(),
+    };
+    const dn = document.getElementById("s-device").value.trim();
+    if (dn) cfg.deviceName = dn;
+    await api.saveConfig(cfg);
+    const saved = document.getElementById("s-saved");
+    if (saved) { saved.style.display = "block"; setTimeout(() => saved.style.display = "none", 2000); }
+    await refreshData();
+    render();
+  });
+
+  // Connection toggle
+  const ct = document.getElementById("conn-toggle");
+  if (ct) ct.addEventListener("click", async () => { await api.toggleConnection(); });
+
+  // Pin close button
+  const pinClose = document.getElementById("pin-close");
+  if (pinClose) pinClose.addEventListener("click", () => api.closeWindow());
+
+  // Scroll terminal to bottom
+  const to = document.getElementById("term-output");
+  if (to) to.scrollTop = to.scrollHeight;
 }
-.term-input {
-  flex: 1; background: transparent; border: none; color: #e0e0e0;
-  font-family: "SF Mono", Menlo, monospace; font-size: 11px;
-  outline: none; margin-left: 6px;
+
+async function runTerminalCmd() {
+  const cmd = state.terminalInput.trim();
+  if (!cmd || !state.selectedDevice || state.executing) return;
+
+  // Special commands
+  if (cmd === "clear") { state.terminalLines = []; state.terminalInput = ""; render(); return; }
+  if (cmd === "devices") { state.tab = "devices"; state.terminalInput = ""; render(); return; }
+
+  cmdHistory.push(cmd);
+  cmdHistoryIdx = -1;
+  state.terminalLines.push({ type: "cmd", text: cmd });
+  state.terminalInput = "";
+  state.executing = true;
+  render();
+
+  try {
+    const result = await api.execCommand({ device: state.selectedDevice, command: cmd });
+    if (result.error) {
+      state.terminalLines.push({ type: "error", text: result.error });
+    } else {
+      if (result.stdout) state.terminalLines.push({ type: "stdout", text: result.stdout.replace(/\\n$/, "") });
+      if (result.stderr) state.terminalLines.push({ type: "stderr", text: result.stderr.replace(/\\n$/, "") });
+      const dur = result.completedAt && result.createdAt ? ((result.completedAt - result.createdAt) / 1000).toFixed(1) + "s" : "";
+      state.terminalLines.push({ type: "info", text: \`exit \${result.exitCode}\${dur ? " · " + dur : ""}\` });
+    }
+  } catch (e) {
+    state.terminalLines.push({ type: "error", text: e.message });
+  }
+
+  state.executing = false;
+  if (state.terminalLines.length > 200) state.terminalLines = state.terminalLines.slice(-200);
+  await refreshData();
+  render();
 }
-.term-input:disabled { opacity: 0.4; }
-.term-input::placeholder { color: #444; }
-.settings { padding: 14px; -webkit-app-region: no-drag; }
-.settings-group { margin-bottom: 14px; }
-.settings-label { color: #888; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-.settings-input {
-  width: 100%; background: #1a1a30; border: 1px solid #2a2a4a; color: #e0e0e0;
-  padding: 7px 10px; border-radius: 6px; font-size: 11px; outline: none;
-  font-family: "SF Mono", Menlo, monospace;
+
+async function refreshData() {
+  const [cfg, devices, history] = await Promise.all([
+    api.getConfig(),
+    api.fetchDevices(),
+    api.fetchHistory(50),
+  ]);
+  state.serverUrl = cfg.httpBase;
+  state.connected = cfg.connected;
+  state.configRaw = cfg.raw || null;
+  state.devices = Array.isArray(devices) ? devices : [];
+  state.history = Array.isArray(history) ? history : [];
+  if (state.devices.length && !state.selectedDevice) state.selectedDevice = state.devices[0].id;
 }
-.settings-input:focus { border-color: #7c8aff; }
-.settings-input::placeholder { color: #444; }
-.settings-btn {
-  background: #7c8aff; color: #fff; border: none;
-  padding: 8px 20px; border-radius: 6px; font-size: 11px;
-  cursor: pointer; font-weight: 600; width: 100%; margin-top: 10px;
-}
-.settings-btn:hover { background: #6a78ee; }
-.settings-saved { color: #00c853; font-size: 10px; text-align: center; margin-top: 8px; display: none; }
-.settings-note { color: #555; font-size: 10px; margin-top: 4px; }
-.empty { text-align: center; padding: 40px 20px; color: #444; font-size: 12px; }
-.pin-close-btn {
-  position: fixed; top: 6px; right: 8px; z-index: 9999;
-  width: 20px; height: 20px; border-radius: 50%;
-  background: #2a2a4a; color: #aaa; border: none;
-  font-size: 12px; line-height: 20px; text-align: center;
-  cursor: pointer; -webkit-app-region: no-drag;
-  transition: background 0.15s, color 0.15s;
-}
-.pin-close-btn:hover { background: #ff3d3d; color: #fff; }
-</style>
-</head>
-<body>
-<div id="app"></div>
-<script>
-INLINE_JS_PLACEHOLDER
+
+// ── Init ──
+
+api.onDaemonStatus((data) => { state.connected = data.connected; render(); });
+api.onRefresh(async () => { await refreshData(); render(); });
+api.onPinnedChanged((data) => { state.pinned = data.pinned; render(); });
+
+(async () => {
+  const pinnedState = await api.getPinned();
+  state.pinned = pinnedState?.pinned || false;
+  await refreshData();
+  render();
+  setInterval(async () => { await refreshData(); render(); }, 5000);
+})();
 </script>
 </body>
-</html>`;
+</html>
+`;
 
 // ── Worker fetch ──
 
@@ -188,11 +354,9 @@ export default {
     const url = new URL(req.url);
     const path = url.pathname;
 
-    // Serve app UI (no auth required — runs inside Electron with preload bridge)
+    // Serve app UI — redirect to GitHub Pages
     if (path === "/app") {
-      return new Response(APP_HTML, {
-        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" },
-      });
+      return Response.redirect("https://momomo-agent.github.io/remote-claw/", 302);
     }
 
     // WebSocket endpoint — forward to DO (auth checked inside DO)

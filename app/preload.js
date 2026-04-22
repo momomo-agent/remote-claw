@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
   on: (channel, cb) => ipcRenderer.on(channel, (_, data) => cb(data)),
   off: (channel, cb) => ipcRenderer.removeListener(channel, cb),
+  onTrayMenuClick: (cb) => ipcRenderer.on("tray-menu-click", (_, data) => cb(data)),
+  onNavigateTab: (cb) => ipcRenderer.on("navigate-tab", (_, tab) => cb(tab)),
 
   // Convenience shortcuts (keep for backward compat)
   getConfig: () => ipcRenderer.invoke("get-config"),
