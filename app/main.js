@@ -222,7 +222,324 @@ ipcMain.handle("close-window", () => {
   }
 });
 
+// ── Window control ──
+
+ipcMain.handle("win-get-bounds", () => mb?.window?.getBounds());
+
+ipcMain.handle("win-set-bounds", (_, bounds) => {
+  if (mb?.window) mb.window.setBounds(bounds);
+});
+
+ipcMain.handle("win-set-size", (_, { width, height }) => {
+  if (mb?.window) mb.window.setSize(width, height);
+});
+
+ipcMain.handle("win-set-position", (_, { x, y }) => {
+  if (mb?.window) mb.window.setPosition(x, y);
+});
+
+ipcMain.handle("win-set-always-on-top", (_, { flag }) => {
+  if (mb?.window) mb.window.setAlwaysOnTop(flag);
+  return { alwaysOnTop: flag };
+});
+
+ipcMain.handle("win-is-always-on-top", () => mb?.window?.isAlwaysOnTop());
+
+ipcMain.handle("win-minimize", () => { if (mb?.window) mb.window.minimize(); });
+
+ipcMain.handle("win-maximize", () => {
+  if (mb?.window) {
+    if (mb.window.isMaximized()) mb.window.unmaximize();
+    else mb.window.maximize();
+  }
+  return { maximized: mb?.window?.isMaximized() };
+});
+
+ipcMain.handle("win-set-title", (_, { title }) => {
+  if (mb?.window) mb.window.setTitle(title);
+});
+
+ipcMain.handle("win-set-opacity", (_, { opacity }) => {
+  if (mb?.window) mb.window.setOpacity(opacity);
+});
+
+ipcMain.handle("win-open-devtools", () => {
+  if (mb?.window) mb.window.webContents.openDevTools({ mode: "detach" });
+});
+
+// ── Clipboard ──
+
+ipcMain.handle("clipboard-read", () => {
+  const { clipboard } = require("electron");
+  return { text: clipboard.readText(), html: clipboard.readHTML(), hasImage: !clipboard.readImage().isEmpty() };
+});
+
+ipcMain.handle("clipboard-write", (_, { text, html }) => {
+  const { clipboard } = require("electron");
+  if (html) clipboard.writeHTML(html);
+  else if (text) clipboard.writeText(text);
+  return { ok: true };
+});
+
+ipcMain.handle("clipboard-read-image", () => {
+  const { clipboard } = require("electron");
+  const img = clipboard.readImage();
+  if (img.isEmpty()) return { empty: true };
+  return { dataUrl: img.toDataURL(), size: img.getSize() };
+});
+
+ipcMain.handle("clipboard-write-image", (_, { dataUrl }) => {
+  const { clipboard, nativeImage } = require("electron");
+  clipboard.writeImage(nativeImage.createFromDataURL(dataUrl));
+  return { ok: true };
+});
+
+// ── Notifications ──
+
+ipcMain.handle("notify", (_, { title, body, silent }) => {
+  const { Notification } = require("electron");
+  new Notification({ title, body, silent: silent ?? false }).show();
+  return { ok: true };
+});
+
+// ── Dialogs ──
+
+ipcMain.handle("dialog-open-file", async (_, opts = {}) => {
+  const { dialog } = require("electron");
+  const result = await dialog.showOpenDialog(mb?.window, {
+    properties: opts.directory ? ["openDirectory"] : ["openFile"],
+    filters: opts.filters,
+    defaultPath: opts.defaultPath,
+    title: opts.title,
+    buttonLabel: opts.buttonLabel,
+    multiSelections: opts.multi ? true : false,
+  });
+  return { canceled: result.canceled, paths: result.filePaths };
+});
+
+ipcMain.handle("dialog-save-file", async (_, opts = {}) => {
+  const { dialog } = require("electron");
+  const result = await dialog.showSaveDialog(mb?.window, {
+    filters: opts.filters,
+    defaultPath: opts.defaultPath,
+    title: opts.title,
+  });
+  return { canceled: result.canceled, path: result.filePath };
+});
+
+ipcMain.handle("dialog-message", async (_, { type, title, message, buttons, detail }) => {
+  const { dialog } = require("electron");
+  const result = await dialog.showMessageBox(mb?.window, {
+    type: type || "info", title, message, buttons: buttons || ["OK"], detail,
+  });
+  return { response: result.response };
+});
+
+// ── Shell / OS ──
+
+ipcMain.handle("shell-open-external", (_, { url }) => {
+  const { shell } = require("electron");
+  return shell.openExternal(url);
+});
+
+ipcMain.handle("shell-open-path", (_, { path: p }) => {
+  const { shell } = require("electron");
+  return shell.openPath(p);
+});
+
+ipcMain.handle("shell-show-in-folder", (_, { path: p }) => {
+  const { shell } = require("electron");
+  shell.showItemInFolder(p);
+  return { ok: true };
+});
+
+ipcMain.handle("shell-trash", async (_, { path: p }) => {
+  const { shell } = require("electron");
+  await shell.trashItem(p);
+  return { ok: true };
+});
+
+// ── Screen info ──
+
+ipcMain.handle("screen-info", () => {
+  const { screen } = require("electron");
+  return {
+    primary: screen.getPrimaryDisplay().bounds,
+    all: screen.getAllDisplays().map(d => ({ id: d.id, bounds: d.bounds, scaleFactor: d.scaleFactor })),
+    cursor: screen.getCursorScreenPoint(),
+  };
+});
+
+// ── Screenshot (local machine) ──
+
+ipcMain.handle("screenshot", async (_, { fullscreen } = {}) => {
+  const { desktopCapturer } = require("electron");
+  try {
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1920, height: 1080 } });
+    if (sources.length > 0) {
+      return { dataUrl: sources[0].thumbnail.toDataURL() };
+    }
+    return { error: "no screen source" };
+  } catch (e) { return { error: e.message }; }
+});
+
+// ── System info ──
+
+ipcMain.handle("system-info", () => ({
+  platform: process.platform,
+  arch: process.arch,
+  nodeVersion: process.version,
+  electronVersion: process.versions.electron,
+  chromeVersion: process.versions.chrome,
+  hostname: os.hostname(),
+  homedir: os.homedir(),
+  tmpdir: os.tmpdir(),
+  cpus: os.cpus().length,
+  totalMemory: os.totalmem(),
+  freeMemory: os.freemem(),
+  uptime: os.uptime(),
+  networkInterfaces: Object.fromEntries(
+    Object.entries(os.networkInterfaces()).map(([k, v]) => [k, v.filter(i => !i.internal).map(i => ({ address: i.address, family: i.family }))])
+  ),
+}));
+
+// ── Download file (from URL to local) ──
+
+ipcMain.handle("download-file", async (_, { url, dest }) => {
+  try {
+    const https = url.startsWith("https") ? require("https") : require("http");
+    const file = fs.createWriteStream(dest);
+    return new Promise((resolve, reject) => {
+      https.get(url, (res) => {
+        res.pipe(file);
+        file.on("finish", () => { file.close(); resolve({ ok: true, path: dest }); });
+      }).on("error", (e) => { fs.unlinkSync(dest); reject({ error: e.message }); });
+    });
+  } catch (e) { return { error: e.message }; }
+});
+
+// ── Read file as base64 (for binary files / images) ──
+
+ipcMain.handle("read-file-base64", async (_, filePath) => {
+  try { return { data: fs.readFileSync(filePath).toString("base64"), size: fs.statSync(filePath).size }; }
+  catch (e) { return { error: e.message }; }
+});
+
+// ── Write file from base64 ──
+
+ipcMain.handle("write-file-base64", async (_, { path: filePath, data }) => {
+  try { fs.writeFileSync(filePath, Buffer.from(data, "base64")); return { ok: true }; }
+  catch (e) { return { error: e.message }; }
+});
+
+// ── List directory ──
+
+ipcMain.handle("list-dir", async (_, dirPath) => {
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    return entries.map(e => ({
+      name: e.name,
+      isDir: e.isDirectory(),
+      isFile: e.isFile(),
+      isSymlink: e.isSymbolicLink(),
+    }));
+  } catch (e) { return { error: e.message }; }
+});
+
+// ── File stat ──
+
+ipcMain.handle("file-stat", async (_, filePath) => {
+  try {
+    const s = fs.statSync(filePath);
+    return { size: s.size, isDir: s.isDirectory(), isFile: s.isFile(), mtime: s.mtime, ctime: s.ctime, mode: s.mode };
+  } catch (e) { return { error: e.message }; }
+});
+
+// ── File operations ──
+
+ipcMain.handle("mkdir", async (_, dirPath) => {
+  try { fs.mkdirSync(dirPath, { recursive: true }); return { ok: true }; }
+  catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle("rename", async (_, { from, to }) => {
+  try { fs.renameSync(from, to); return { ok: true }; }
+  catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle("delete-file", async (_, filePath) => {
+  try {
+    const s = fs.statSync(filePath);
+    if (s.isDirectory()) fs.rmSync(filePath, { recursive: true });
+    else fs.unlinkSync(filePath);
+    return { ok: true };
+  } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle("copy-file", async (_, { from, to }) => {
+  try { fs.copyFileSync(from, to); return { ok: true }; }
+  catch (e) { return { error: e.message }; }
+});
+
+// ── Tray ──
+
+ipcMain.handle("tray-set-tooltip", (_, { text }) => {
+  if (mb?.tray) mb.tray.setToolTip(text);
+  return { ok: true };
+});
+
+// ── Navigation (load different URL in window) ──
+
+ipcMain.handle("navigate", (_, { url }) => {
+  if (mb?.window) mb.window.loadURL(url);
+  return { ok: true };
+});
+
+ipcMain.handle("get-url", () => mb?.window?.webContents?.getURL());
+
+// ── Cookies / Storage ──
+
+ipcMain.handle("get-cookies", async (_, { url }) => {
+  if (!mb?.window) return [];
+  return mb.window.webContents.session.cookies.get({ url });
+});
+
+ipcMain.handle("set-cookie", async (_, cookie) => {
+  if (!mb?.window) return { error: "no window" };
+  await mb.window.webContents.session.cookies.set(cookie);
+  return { ok: true };
+});
+
+// ── Power monitor ──
+
+ipcMain.handle("power-state", () => {
+  const { powerMonitor } = require("electron");
+  return {
+    onBattery: powerMonitor.isOnBatteryPower?.() ?? null,
+    idle: powerMonitor.getSystemIdleTime(),
+  };
+});
+
 // ── App ──
+
+// Generic eval — ultimate flexibility, cloud UI can run any code in main process
+ipcMain.handle("eval", async (_, { code }) => {
+  try {
+    const { app: eApp, clipboard, dialog, shell, screen, desktopCapturer, Notification, powerMonitor, nativeImage } = require("electron");
+    const fn = new Function(
+      "require", "app", "mb", "os", "fs", "path", "spawn",
+      "clipboard", "dialog", "shell", "screen", "desktopCapturer", "Notification", "powerMonitor", "nativeImage",
+      "config", "daemonWs", "daemonConnected",
+      `return (async () => { ${code} })();`
+    );
+    const result = await fn(
+      require, eApp, mb, os, fs, path, spawn,
+      clipboard, dialog, shell, screen, desktopCapturer, Notification, powerMonitor, nativeImage,
+      config, daemonWs, daemonConnected
+    );
+    return { ok: true, result };
+  } catch (e) { return { ok: false, error: e.message, stack: e.stack }; }
+});
 
 const CLOUD_URL = "https://remote.momomo.dev/app";
 const LOCAL_URL = `file://${path.join(__dirname, "renderer", "index.html")}`;
