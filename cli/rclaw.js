@@ -7,7 +7,7 @@ const SERVER = "https://remote.momomo.dev";
 const TOKEN = "rclaw-4847bbe08bda2c785f4e4e6bc05e4815";
 const PROXY_HOST = "127.0.0.1";
 const PROXY_PORT = 7890;
-const CHUNK_SIZE = 512 * 1024; // 512KB per chunk
+const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB per chunk
 
 function api(method, path, body) {
   return new Promise((resolve, reject) => {

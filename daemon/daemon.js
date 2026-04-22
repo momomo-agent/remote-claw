@@ -139,7 +139,7 @@ function execCommand(taskId, command) {
 
 // ── File Transfer ──
 
-const CHUNK_SIZE = 512 * 1024; // 512KB per chunk
+const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB per chunk
 
 function getHttpBase() {
   return config.server.replace("wss://", "https://").replace("ws://", "http://");
