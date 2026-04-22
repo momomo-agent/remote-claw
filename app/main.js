@@ -682,6 +682,8 @@ app.on("ready", () => {
       const dy = Math.abs(winBounds.y - (trayBounds.y + trayBounds.height));
       if (dx > 50 || dy > 50) {
         isPinned = true;
+        mb.window.setAlwaysOnTop(false); // normal window behavior
+        mb.window.setVisibleOnAllWorkspaces(false);
         sendToRenderer("pinned-changed", { pinned: true });
       }
     });
@@ -689,10 +691,23 @@ app.on("ready", () => {
     // When window is hidden (e.g. by menubar auto-hide or close button), reset pin
     mb.window.on("hide", () => {
       if (isPinned) {
-        isPinned = false;
-        sendToRenderer("pinned-changed", { pinned: false });
+        // Shouldn't happen since we patched hide(), but just in case
+        mb.window.show();
+        return;
       }
     });
+
+    // Prevent blur-triggered hide when pinned
+    mb.window.on("blur", () => {
+      if (isPinned) return;
+    });
+
+    // Monkey-patch window.hide to prevent menubar from hiding pinned window
+    const origHide = mb.window.hide.bind(mb.window);
+    mb.window.hide = () => {
+      if (isPinned) return;
+      origHide();
+    };
   });
 
   // Override menubar's show/hide behavior when pinned
