@@ -573,7 +573,7 @@ async function refreshData() {
   const [devices, history] = await Promise.all([
     apiFetch('/devices'), apiFetch('/history?limit=50'),
   ]);
-  state.devices = Array.isArray(devices) ? devices : [];
+  state.devices = Array.isArray(devices) ? devices.filter(d => !d.id.startsWith('app-')) : [];
   state.history = Array.isArray(history) ? history : [];
   if (state.devices.length && !state.selectedDevice) state.selectedDevice = state.devices[0].id;
 }
