@@ -274,6 +274,9 @@ require(['vs/editor/editor.main'], function () {
     automaticLayout: true,
   });
 
+  // Remove placeholder
+  document.querySelectorAll('#editor-container .editor-empty').forEach(el => el.remove());
+
   // Cmd+S to save
   monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveFile);
 
