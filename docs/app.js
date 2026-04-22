@@ -299,7 +299,7 @@ function renderFiles() {
         <div class="file-icon">${f.isDir ? '📁' : f.isSymlink ? '🔗' : fileIcon(f.name)}</div>
         <div class="file-info">
           <div class="file-name ${f.isDir ? 'dir' : ''}">${esc(f.name)}</div>
-          ${f.mtime ? `<div class="file-meta">${new Date(f.mtime).toLocaleDateString()}</div>` : ''}
+          ${f.mtime ? `<div class="file-meta">${f.mtime}</div>` : ''}
         </div>
         <div class="file-size">${f.isDir ? '' : formatSize(f.size)}</div>
       </div>
@@ -373,7 +373,7 @@ async function loadFiles(dirPath) {
 
 function parseLsLine(line) {
   // drwxr-xr-x  5 user  staff  160 Apr 22 10:30 dirname
-  const m = line.match(/^([dlcbsp-])([rwxsStT-]{9})\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w+\s+\d+\s+[\d:]+)\s+(.+)$/);
+  const m = line.match(/^([dlcbsp-])([rwxsStT-]{9})[+@.]?\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w+\s+\d+\s+[\d:]+)\s+(.+)$/);
   if (!m) return null;
   const isDir = m[1] === 'd';
   const isSymlink = m[1] === 'l';

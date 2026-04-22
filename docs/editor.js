@@ -51,7 +51,7 @@ async function loadDir(dir) {
 }
 
 function parseLsLine(line) {
-  const m = line.match(/^([dlcbsp-])([rwxsStT-]{9})\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w+\s+\d+\s+[\d:]+)\s+(.+)$/);
+  const m = line.match(/^([dlcbsp-])([rwxsStT-]{9})[+@.]?\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w+\s+\d+\s+[\d:]+)\s+(.+)$/);
   if (!m) return null;
   let name = m[5];
   if (m[1] === 'l' && name.includes(' -> ')) name = name.split(' -> ')[0];
