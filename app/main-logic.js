@@ -275,7 +275,7 @@ ipcMain.handle("get-pinned", () => ({ pinned: isPinned }));
 ipcMain.handle("set-pinned", (_, { pinned }) => {
   isPinned = pinned;
   mb._pinned = pinned;
-  if (pinned && mb?.window) { mb.window.setAlwaysOnTop(false); mb.window.setVisibleOnAllWorkspaces(false); }
+  if (mb?.window) { mb.window.setAlwaysOnTop(pinned); mb.window.setVisibleOnAllWorkspaces(pinned); }
   sendToRenderer("pinned-changed", { pinned });
   return { ok: true };
 });
