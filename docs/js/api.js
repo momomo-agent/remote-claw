@@ -81,7 +81,7 @@ export async function refreshData() {
     apiFetch('/devices'),
     apiFetch('/history?limit=50'),
   ])
-  state.devices = Array.isArray(devices) ? devices : []
+  state.devices = Array.isArray(devices) ? devices.filter(d => !d.id?.startsWith('app-')) : []
   // Merge server history with local; prefer server if available
   const serverHistory = Array.isArray(history) ? history : []
   if (serverHistory.length) {
