@@ -1,43 +1,22 @@
 // RemoteClaw Main Logic — hot-updatable via GitHub
-// This file is fetched from GitHub on each app launch
+// App is a pure UI client. Daemon handles all command execution.
 
 const { app, nativeImage, ipcMain } = require("electron");
 const { menubar } = require("menubar");
 const path = require("path");
-const { spawn } = require("child_process");
 const WebSocket = require("ws");
 const fs = require("fs");
 const os = require("os");
 
-// App directory — always the real app location, even when loaded from cache
 const APP_DIR = path.dirname(require.main?.filename || __dirname);
 const LOADING_HTML = path.join(APP_DIR, "loading.html");
 
-// Load a BrowserWindow with loading splash, then navigate to target URL
 function loadWithSplash(win, targetUrl) {
   win.loadFile(LOADING_HTML);
   win.webContents.on('did-finish-load', function onSplash() {
     win.webContents.removeListener('did-finish-load', onSplash);
     win.loadURL(targetUrl);
   });
-}
-
-// ── Auto-install rclaw CLI ──
-
-function installCLI() {
-  const cliSrc = path.join(APP_DIR, "..", "cli", "rclaw.js");
-  const cliDst = "/usr/local/bin/rclaw";
-  try {
-    try { fs.unlinkSync(cliDst); } catch {}
-    fs.symlinkSync(cliSrc, cliDst);
-  } catch {
-    try {
-      const userBin = path.join(os.homedir(), ".local", "bin", "rclaw");
-      fs.mkdirSync(path.dirname(userBin), { recursive: true });
-      try { fs.unlinkSync(userBin); } catch {}
-      fs.symlinkSync(cliSrc, userBin);
-    } catch {}
-  }
 }
 
 // ── Config ──
@@ -48,12 +27,7 @@ const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 function loadConfig() {
   if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
   if (!fs.existsSync(CONFIG_PATH)) {
-    const defaults = {
-      server: "wss://remote.momomo.dev",
-      token: "CHANGE_ME",
-      deviceName: os.hostname(),
-
-    };
+    const defaults = { server: "wss://remote.momomo.dev", token: "CHANGE_ME" };
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2));
   }
   return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
@@ -65,14 +39,12 @@ const httpBase = config.server.replace("wss://", "https://").replace("ws://", "h
 // ── Tray icon ──
 
 function createTrayIcon(connected) {
-  // Use Template image for native macOS menubar look
   const trayPath = path.join(APP_DIR, 'trayTemplate.png');
   try {
     const img = nativeImage.createFromPath(trayPath);
     img.setTemplateImage(true);
     return img;
   } catch {
-    // Fallback: programmatic colored dot
     const size = 22;
     const canvas = Buffer.alloc(size * size * 4, 0);
     const cx = 11, cy = 11, r = 7;
@@ -80,12 +52,10 @@ function createTrayIcon(connected) {
       for (let x = 0; x < size; x++) {
         const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
         if (dist <= r) {
-          const idx = (y * size + x) * 4;
-          if (connected) {
-            canvas[idx] = 0; canvas[idx + 1] = 200; canvas[idx + 2] = 80; canvas[idx + 3] = 255;
-          } else {
-            canvas[idx] = 180; canvas[idx + 1] = 50; canvas[idx + 2] = 50; canvas[idx + 3] = 255;
-          }
+          const i = (y * size + x) * 4;
+          if (connected) { canvas[i] = 52; canvas[i + 1] = 199; canvas[i + 2] = 89; }
+          else { canvas[i] = 120; canvas[i + 1] = 120; canvas[i + 2] = 128; }
+          canvas[i + 3] = dist > r - 1 ? Math.round((r - dist) * 255) : 255;
         }
       }
     }
@@ -95,132 +65,70 @@ function createTrayIcon(connected) {
 
 // ── State ──
 
-let daemonWs = null;
-let daemonConnected = false;
+let clientWs = null;
+let connected = false;
 let mb = null;
 let isPinned = false;
 let trayBounds = null;
 let manualDisconnect = false;
 
-// ── Daemon WS ──
+// ── Client WS (subscribe only, no command execution) ──
 
-function connectDaemon() {
-  const appDeviceId = `app-${config.deviceName || os.hostname()}`;
-  const url = `${config.server}/ws?device=${encodeURIComponent(appDeviceId)}&token=${encodeURIComponent(config.token)}&role=client`;
-  daemonWs = new WebSocket(url);
+function connectClient() {
+  const clientId = `app-${os.hostname()}`;
+  const url = `${config.server}/ws?device=${encodeURIComponent(clientId)}&token=${encodeURIComponent(config.token)}&role=client`;
+  clientWs = new WebSocket(url);
 
-  daemonWs.on("open", () => {
-    daemonConnected = true;
+  clientWs.on("open", () => {
+    connected = true;
     if (mb?.tray) mb.tray.setImage(createTrayIcon(true));
     sendToRenderer("daemon-status", { connected: true });
   });
 
-  daemonWs.on("message", (data) => {
+  clientWs.on("message", (data) => {
     try {
       const msg = JSON.parse(data.toString());
-      if (msg.type === "exec") {
-        const proc = spawn("sh", ["-c", msg.command], { env: { ...process.env, HOME: os.homedir(), PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` }, timeout: 60000 });
-        let stdout = "", stderr = "";
-        proc.stdout.on("data", (d) => { stdout += d.toString(); });
-        proc.stderr.on("data", (d) => { stderr += d.toString(); });
-        proc.on("close", (exitCode) => {
-          if (daemonWs?.readyState === WebSocket.OPEN) {
-            daemonWs.send(JSON.stringify({ type: "result", taskId: msg.taskId, stdout, stderr, exitCode }));
-          }
-        });
-      }
+      // Forward shell events to renderer (PTY data comes from daemon via server)
       if (msg.type === "shell-data" || msg.type === "shell-exit") {
         sendToRenderer(msg.type, msg);
       }
-      // File receive
-      if (msg.type === "file-start") handleIncomingFileStart(msg);
-      if (msg.type === "file-chunk") handleIncomingFileChunk(msg);
-      if (msg.type === "file-end") handleIncomingFileEnd(msg);
     } catch {}
   });
 
-  daemonWs.on("close", () => {
-    daemonConnected = false;
+  clientWs.on("close", () => {
+    connected = false;
     if (mb?.tray) mb.tray.setImage(createTrayIcon(false));
     sendToRenderer("daemon-status", { connected: false });
-    if (!manualDisconnect) setTimeout(connectDaemon, 3000);
+    if (!manualDisconnect) setTimeout(connectClient, 3000);
   });
 
-  daemonWs.on("error", () => {});
+  clientWs.on("error", () => {});
 }
 
 function sendToRenderer(channel, data) {
-  if (mb?.window?.webContents) {
-    mb.window.webContents.send(channel, data);
-  }
-  // Broadcast shell-data/shell-exit to all independent windows (editor terminals)
+  if (mb?.window?.webContents) mb.window.webContents.send(channel, data);
   if (channel === 'shell-data' || channel === 'shell-exit') {
     for (const win of allIndependentWindows) {
-      if (!win.isDestroyed() && win.webContents) {
-        win.webContents.send(channel, data);
-      }
+      if (!win.isDestroyed() && win.webContents) win.webContents.send(channel, data);
     }
-  }
-}
-
-// ── File Receive ──
-
-const incomingTransfers = new Map();
-
-function handleIncomingFileStart(msg) {
-  const destPath = msg.remotePath.replace(/^~/, os.homedir());
-  const dir = path.dirname(destPath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const fd = fs.openSync(destPath, "w");
-  incomingTransfers.set(msg.transferId, { fd, path: destPath, received: 0, total: msg.totalChunks });
-}
-
-function handleIncomingFileChunk(msg) {
-  const t = incomingTransfers.get(msg.transferId);
-  if (!t) return;
-  const buf = Buffer.from(msg.data, "base64");
-  fs.writeSync(t.fd, buf, 0, buf.length);
-  t.received++;
-}
-
-function handleIncomingFileEnd(msg) {
-  const t = incomingTransfers.get(msg.transferId);
-  if (!t) return;
-  fs.closeSync(t.fd);
-  incomingTransfers.delete(msg.transferId);
-  if (daemonWs?.readyState === WebSocket.OPEN) {
-    daemonWs.send(JSON.stringify({ type: "result", taskId: msg.transferId, stdout: `Received: ${t.path}\n`, stderr: "", exitCode: 0 }));
   }
 }
 
 // ── IPC: Config ──
 
-ipcMain.handle("get-config", () => ({ ...config, httpBase, connected: daemonConnected, raw: JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) }));
+ipcMain.handle("get-config", () => ({ ...config, httpBase, connected, raw: JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) }));
 
 ipcMain.handle("save-config", async (_, newCfg) => {
   const existing = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
   const merged = { ...existing, ...newCfg };
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2));
   Object.assign(config, loadConfig());
-  if (daemonWs) { daemonWs.close(); }
-  setTimeout(connectDaemon, 500);
+  if (clientWs) clientWs.close();
+  setTimeout(connectClient, 500);
   return true;
 });
 
-// ── IPC: Exec ──
-
-ipcMain.handle("local-exec", async (_, { command, timeout = 30000 }) => {
-  return new Promise((resolve) => {
-    const proc = spawn("sh", ["-c", command], { env: { ...process.env, HOME: os.homedir(), PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` }, timeout });
-    let stdout = "", stderr = "";
-    proc.stdout.on("data", (d) => { stdout += d.toString(); });
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
-    proc.on("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
-    proc.on("error", (e) => resolve({ stdout, stderr, exitCode: -1, error: e.message }));
-  });
-});
-
-// ── IPC: Remote exec/devices/history (kept for backward compat, renderer can also fetch directly) ──
+// ── IPC: Remote exec/devices/history (all via HTTP API to server) ──
 
 ipcMain.handle("fetch-devices", async () => {
   try { return await (await fetch(`${httpBase}/devices`, { headers: { Authorization: `Bearer ${config.token}` } })).json(); }
@@ -242,10 +150,10 @@ ipcMain.handle("exec-command", async (_, { device, command }) => {
   } catch (e) { return { error: e.message }; }
 });
 
-// ── IPC: Shell PTY ──
+// ── IPC: Shell PTY (relay via client WS to server → daemon) ──
 
 function wsSend(msg) {
-  if (daemonWs?.readyState === WebSocket.OPEN) { daemonWs.send(JSON.stringify(msg)); return { ok: true }; }
+  if (clientWs?.readyState === WebSocket.OPEN) { clientWs.send(JSON.stringify(msg)); return { ok: true }; }
   return { error: "not connected" };
 }
 
@@ -266,16 +174,16 @@ ipcMain.handle("set-pinned", (_, { pinned }) => {
 });
 
 ipcMain.handle("toggle-connection", () => {
-  if (daemonConnected || daemonWs) {
+  if (connected || clientWs) {
     manualDisconnect = true;
-    if (daemonWs) { daemonWs.removeAllListeners("close"); daemonWs.close(); daemonWs = null; }
-    daemonConnected = false;
+    if (clientWs) { clientWs.removeAllListeners("close"); clientWs.close(); clientWs = null; }
+    connected = false;
     if (mb?.tray) mb.tray.setImage(createTrayIcon(false));
     sendToRenderer("daemon-status", { connected: false });
     return { connected: false };
   } else {
     manualDisconnect = false;
-    connectDaemon();
+    connectClient();
     return { connected: true };
   }
 });
@@ -303,11 +211,9 @@ const allIndependentWindows = new Set();
 
 function trackIndependentWindow(win) {
   allIndependentWindows.add(win);
-  // Show dock when first independent window opens
   if (allIndependentWindows.size === 1 && app.dock) app.dock.show();
   win.on("closed", () => {
     allIndependentWindows.delete(win);
-    // Hide dock when all independent windows closed
     if (allIndependentWindows.size === 0 && app.dock) app.dock.hide();
   });
 }
@@ -322,7 +228,7 @@ ipcMain.handle("open-tab-window", (_, { tab, device, title }) => {
 
   const win = new BrowserWindow({
     width: w, height: h, minWidth: 400, minHeight: 300,
-    title: title || `RemoteClaw — ${tab}`,
+    title: title || `RemoteClaw \u2014 ${tab}`,
     backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
@@ -347,7 +253,7 @@ ipcMain.handle("open-preview", (_, { file, device, title }) => {
   const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
   const win = new BrowserWindow({
     width: 900, height: 620, minWidth: 600, minHeight: 400,
-    title: title || `Preview — ${file.split('/').pop()}`,
+    title: title || `Preview \u2014 ${file.split('/').pop()}`,
     backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
@@ -398,7 +304,7 @@ ipcMain.handle("open-code-server", async (_, { device, folder }) => {
 
   const win = new BrowserWindow({
     width: 1280, height: 800, minWidth: 800, minHeight: 600,
-    title: "VS Code " + String.fromCharCode(0x2014) + " " + (device || "local"),
+    title: "VS Code \u2014 " + (device || "local"),
     backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
@@ -426,9 +332,9 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
   const browseUrl = proxy.url + (urlPath || "/");
 
   const win = new BrowserWindow({
-    width: 1100, height: 750, minWidth: 600, minHeight: 400,
-    title: `${device}:${port}`,
-    backgroundColor: '#161618',
+    width: 1280, height: 800, minWidth: 800, minHeight: 600,
+    title: `localhost:${port} \u2014 ${device || "local"}`,
+    backgroundColor: '#ffffff',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
@@ -439,102 +345,97 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
   return { ok: true };
 });
 
-ipcMain.handle("read-file", async (_, p) => { try { return { data: fs.readFileSync(p, "utf-8") }; } catch (e) { return { error: e.message }; } });
-ipcMain.handle("write-file", async (_, { path: p, data }) => { try { fs.writeFileSync(p, data); return { ok: true }; } catch (e) { return { error: e.message }; } });
-ipcMain.handle("read-file-base64", async (_, p) => { try { return { data: fs.readFileSync(p).toString("base64"), size: fs.statSync(p).size }; } catch (e) { return { error: e.message }; } });
-ipcMain.handle("write-file-base64", async (_, { path: p, data }) => { try { fs.writeFileSync(p, Buffer.from(data, "base64")); return { ok: true }; } catch (e) { return { error: e.message }; } });
-ipcMain.handle("list-dir", async (_, p) => { try { return fs.readdirSync(p, { withFileTypes: true }).map(e => ({ name: e.name, isDir: e.isDirectory(), isFile: e.isFile(), isSymlink: e.isSymbolicLink() })); } catch (e) { return { error: e.message }; } });
-ipcMain.handle("file-stat", async (_, p) => { try { const s = fs.statSync(p); return { size: s.size, isDir: s.isDirectory(), isFile: s.isFile(), mtime: s.mtime, ctime: s.ctime, mode: s.mode }; } catch (e) { return { error: e.message }; } });
-ipcMain.handle("mkdir", async (_, p) => { try { fs.mkdirSync(p, { recursive: true }); return { ok: true }; } catch (e) { return { error: e.message }; } });
-ipcMain.handle("rename", async (_, { from, to }) => { try { fs.renameSync(from, to); return { ok: true }; } catch (e) { return { error: e.message }; } });
-ipcMain.handle("delete-file", async (_, p) => { try { const s = fs.statSync(p); s.isDirectory() ? fs.rmSync(p, { recursive: true }) : fs.unlinkSync(p); return { ok: true }; } catch (e) { return { error: e.message }; } });
-ipcMain.handle("copy-file", async (_, { from, to }) => { try { fs.copyFileSync(from, to); return { ok: true }; } catch (e) { return { error: e.message }; } });
+// ── IPC: Clipboard ──
 
-// ── IPC: Electron native APIs ──
-
-ipcMain.handle("app-info", () => ({ version: require("./package.json").version, platform: process.platform, arch: process.arch, hostname: os.hostname(), homedir: os.homedir() }));
 ipcMain.handle("clipboard-read", () => { const { clipboard } = require("electron"); return { text: clipboard.readText(), html: clipboard.readHTML(), hasImage: !clipboard.readImage().isEmpty() }; });
-ipcMain.handle("clipboard-write", (_, { text, html }) => { const { clipboard } = require("electron"); html ? clipboard.writeHTML(html) : clipboard.writeText(text); return { ok: true }; });
+ipcMain.handle("clipboard-write", (_, { text, html }) => { const { clipboard } = require("electron"); if (text) clipboard.writeText(text); if (html) clipboard.writeHTML(html); return { ok: true }; });
 ipcMain.handle("clipboard-read-image", () => { const { clipboard } = require("electron"); const img = clipboard.readImage(); return img.isEmpty() ? { empty: true } : { dataUrl: img.toDataURL(), size: img.getSize() }; });
-ipcMain.handle("clipboard-write-image", (_, { dataUrl }) => { const { clipboard, nativeImage } = require("electron"); clipboard.writeImage(nativeImage.createFromDataURL(dataUrl)); return { ok: true }; });
-ipcMain.handle("notify", (_, { title, body, silent }) => { new (require("electron").Notification)({ title, body, silent: silent ?? false }).show(); return { ok: true }; });
-ipcMain.handle("dialog-open-file", async (_, opts = {}) => { const r = await require("electron").dialog.showOpenDialog(mb?.window, { properties: opts.directory ? ["openDirectory"] : ["openFile"], filters: opts.filters, defaultPath: opts.defaultPath, title: opts.title, buttonLabel: opts.buttonLabel }); return { canceled: r.canceled, paths: r.filePaths }; });
-ipcMain.handle("dialog-save-file", async (_, opts = {}) => { const r = await require("electron").dialog.showSaveDialog(mb?.window, { filters: opts.filters, defaultPath: opts.defaultPath, title: opts.title }); return { canceled: r.canceled, path: r.filePath }; });
-ipcMain.handle("dialog-message", async (_, { type, title, message, buttons, detail }) => { const r = await require("electron").dialog.showMessageBox(mb?.window, { type: type || "info", title, message, buttons: buttons || ["OK"], detail }); return { response: r.response }; });
+
+// ── IPC: Notifications ──
+
+ipcMain.handle("notify", (_, { title, body }) => { const { Notification } = require("electron"); new Notification({ title, body }).show(); return { ok: true }; });
+
+// ── IPC: Shell utilities (Electron shell, not PTY) ──
+
 ipcMain.handle("shell-open-external", (_, { url }) => require("electron").shell.openExternal(url));
 ipcMain.handle("shell-open-path", (_, { path: p }) => require("electron").shell.openPath(p));
 ipcMain.handle("shell-show-in-folder", (_, { path: p }) => { require("electron").shell.showItemInFolder(p); return { ok: true }; });
 ipcMain.handle("shell-trash", async (_, { path: p }) => { await require("electron").shell.trashItem(p); return { ok: true }; });
-ipcMain.handle("screen-info", () => { const { screen } = require("electron"); return { primary: screen.getPrimaryDisplay().bounds, all: screen.getAllDisplays().map(d => ({ id: d.id, bounds: d.bounds, scaleFactor: d.scaleFactor })), cursor: screen.getCursorScreenPoint() }; });
-ipcMain.handle("screenshot", async () => { try { const s = await require("electron").desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1920, height: 1080 } }); return s.length ? { dataUrl: s[0].thumbnail.toDataURL() } : { error: "no screen" }; } catch (e) { return { error: e.message }; } });
-ipcMain.handle("system-info", () => ({ platform: process.platform, arch: process.arch, nodeVersion: process.version, electronVersion: process.versions.electron, hostname: os.hostname(), homedir: os.homedir(), tmpdir: os.tmpdir(), cpus: os.cpus().length, totalMemory: os.totalmem(), freeMemory: os.freemem(), uptime: os.uptime() }));
-ipcMain.handle("download-file", async (_, { url, dest }) => { try { const h = url.startsWith("https") ? require("https") : require("http"); const f = fs.createWriteStream(dest); return new Promise((res, rej) => { h.get(url, r => { r.pipe(f); f.on("finish", () => { f.close(); res({ ok: true, path: dest }); }); }).on("error", e => { fs.unlinkSync(dest); rej({ error: e.message }); }); }); } catch (e) { return { error: e.message }; } });
-ipcMain.handle("power-state", () => { const { powerMonitor } = require("electron"); return { onBattery: powerMonitor.isOnBatteryPower?.() ?? null, idle: powerMonitor.getSystemIdleTime() }; });
-ipcMain.handle("tray-set-tooltip", (_, { text }) => { if (mb?.tray) mb.tray.setToolTip(text); return { ok: true }; });
-ipcMain.handle("navigate", (_, { url }) => { if (mb?.window) mb.window.loadURL(url); return { ok: true }; });
-ipcMain.handle("get-url", () => mb?.window?.webContents?.getURL());
-ipcMain.handle("get-cookies", async (_, { url }) => mb?.window ? mb.window.webContents.session.cookies.get({ url }) : []);
-ipcMain.handle("set-cookie", async (_, cookie) => { if (!mb?.window) return { error: "no window" }; await mb.window.webContents.session.cookies.set(cookie); return { ok: true }; });
 
-// ── IPC: Eval (ultimate flexibility) ──
+// ── Hot Update ──
 
-ipcMain.handle("eval", async (_, { code }) => {
+async function checkForUpdate() {
   try {
-    const electron = require("electron");
-    const fn = new Function("require", "app", "mb", "os", "fs", "path", "spawn", "electron", "config", "daemonWs", "daemonConnected",
-      `return (async () => { ${code} })();`);
-    const result = await fn(require, app, mb, os, fs, path, spawn, electron, config, daemonWs, daemonConnected);
-    return { ok: true, result };
-  } catch (e) { return { ok: false, error: e.message, stack: e.stack }; }
-});
+    const res = await fetch("https://raw.githubusercontent.com/momomo-agent/remote-claw/main/app/main-logic.js", { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return;
+    const remote = await res.text();
+    const stagingPath = path.join(CONFIG_DIR, "main-logic.staging.js");
+    const cachedPath = path.join(CONFIG_DIR, "main-logic.js");
+    const current = fs.existsSync(cachedPath) ? fs.readFileSync(cachedPath, "utf-8") : "";
+    if (remote !== current) {
+      fs.writeFileSync(stagingPath, remote);
+      const meta = { stagedAt: Date.now(), sha: require("crypto").createHash("sha256").update(remote).digest("hex").slice(0, 12) };
+      fs.writeFileSync(path.join(CONFIG_DIR, "main-logic.meta.json"), JSON.stringify(meta));
+    }
+  } catch {}
+}
 
-// ── Menubar setup ──
+setTimeout(checkForUpdate, 5000);
+
+// ── Menubar ──
 
 const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
 const LOCAL_URL = `file://${path.join(APP_DIR, "renderer", "index.html")}`;
 
-installCLI();
+app.dock?.hide();
 
 mb = menubar({
-  index: `file://${LOADING_HTML}`,
+  index: CLOUD_URL,
   icon: createTrayIcon(false),
   preloadWindow: true,
-  browserWindow: {
-    width: 420, height: 560, minWidth: 320, minHeight: 400,
-    backgroundColor: '#161618',
-    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
-    resizable: true, skipTaskbar: true,
-  },
   showDockIcon: false,
+  browserWindow: {
+    width: 380, height: 580,
+    resizable: true,
+    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
+    backgroundColor: '#161618',
+    skipTaskbar: true,
+    frame: false,
+    transparent: false,
+    hasShadow: true,
+    roundedCorners: true,
+    vibrancy: null,
+  },
 });
 
 mb.on("ready", () => {
-  // Navigate to cloud UI
-  if (mb.window) {
-    mb.window.loadURL(CLOUD_URL);
-  }
-  connectDaemon();
+  connectClient();
 
   const { Menu } = require("electron");
   let trayMenu = Menu.buildFromTemplate([
-    { label: "Show", click: () => mb.showWindow() },
-    { label: "Devices", click: () => { mb.showWindow(); sendToRenderer("navigate-tab", "devices"); } },
-    { label: "Terminal", click: () => { mb.showWindow(); sendToRenderer("navigate-tab", "terminal"); } },
+    { label: "RemoteClaw", enabled: false },
     { type: "separator" },
-    { label: "Connect", type: "checkbox", checked: daemonConnected, click: (item) => {
-      if (daemonConnected || daemonWs) {
+    { label: "Pin Window", type: "checkbox", checked: false, click: (item) => {
+      isPinned = item.checked;
+      mb._pinned = isPinned;
+      if (isPinned && mb.window) { mb.window.setAlwaysOnTop(false); mb.window.setVisibleOnAllWorkspaces(false); }
+      sendToRenderer("pinned-changed", { pinned: isPinned });
+    }},
+    { label: "Open Web UI", click: () => require("electron").shell.openExternal(CLOUD_URL) },
+    { label: "Connected", type: "checkbox", checked: false, click: (item) => {
+      if (connected) {
         manualDisconnect = true;
-        if (daemonWs) { daemonWs.removeAllListeners("close"); daemonWs.close(); daemonWs = null; }
-        daemonConnected = false;
+        if (clientWs) { clientWs.removeAllListeners("close"); clientWs.close(); clientWs = null; }
+        connected = false;
         if (mb?.tray) mb.tray.setImage(createTrayIcon(false));
         sendToRenderer("daemon-status", { connected: false });
         item.checked = false;
-      } else { manualDisconnect = false; connectDaemon(); item.checked = true; }
+      } else { manualDisconnect = false; connectClient(); item.checked = true; }
     }},
     { type: "separator" },
     { label: "Quit", click: () => app.quit() },
   ]);
-  mb.tray.on("right-click", () => { trayMenu.items[4].checked = daemonConnected; mb.tray.popUpContextMenu(trayMenu); });
+  mb.tray.on("right-click", () => { trayMenu.items[4].checked = connected; mb.tray.popUpContextMenu(trayMenu); });
 
   ipcMain.handle("tray-set-menu", (_, { items }) => {
     const template = items.map(item => item.type === "separator" ? { type: "separator" } : {

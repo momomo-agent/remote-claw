@@ -25,7 +25,7 @@ export default defineComponent({
             ),
             h('div', { class: 'device-info' }, [
               h('div', { class: 'device-name' }, d.name),
-              h('div', { class: 'device-detail' }, d.id.startsWith('app-') ? 'App' : 'Daemon'),
+              h('div', { class: 'device-detail' }, (d.capabilities || []).join(' \u00b7 ') || 'Ready'),
             ]),
             h('div', { class: 'device-status' }, [
               h('div', { class: 'device-online' }, 'Online'),
