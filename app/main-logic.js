@@ -392,7 +392,15 @@ ipcMain.handle("get-pinned", () => ({ pinned: isPinned }));
 ipcMain.handle("set-pinned", (_, { pinned }) => {
   isPinned = pinned;
   mb._pinned = pinned;
-  if (mb?.window) { mb.window.setAlwaysOnTop(pinned); mb.window.setVisibleOnAllWorkspaces(pinned); }
+  if (mb?.window) {
+    mb.window.setAlwaysOnTop(pinned);
+    mb.window.setVisibleOnAllWorkspaces(pinned);
+    // Re-bindblur handler based on pin state
+    mb.window.removeAllListeners("blur");
+    if (!pinned) {
+      mb.window.on("blur", () => { if (!isPinned) mb.hideWindow(); });
+    }
+  }
   sendToRenderer("pinned-changed", { pinned });
   return { ok: true };
 });
@@ -413,7 +421,17 @@ ipcMain.handle("toggle-connection", () => {
 });
 
 ipcMain.handle("close-window", () => {
-  if (mb?.window) { isPinned = false; mb._pinned = false; mb.window.hide(); }
+  if (mb?.window) {
+    isPinned = false;
+    mb._pinned = false;
+    mb.window.setAlwaysOnTop(false);
+    mb.window.setVisibleOnAllWorkspaces(false);
+    // Restore blur handler
+    mb.window.removeAllListeners("blur");
+    mb.window.on("blur", () => { if (!isPinned) mb.hideWindow(); });
+    sendToRenderer("pinned-changed", { pinned: false });
+    mb.window.hide();
+  }
 });
 
 ipcMain.handle("win-get-bounds", () => mb?.window?.getBounds());
@@ -879,10 +897,3 @@ mb.on("after-create-window", () => {
 
 mb.on("show", () => { if (isPinned) return; });
 mb.on("hide", () => {});
-
-setTimeout(() => {
-  if (mb) {
-    const origHideWindow = mb.hideWindow.bind(mb);
-    mb.hideWindow = () => { if (!isPinned) origHideWindow(); };
-  }
-}, 100);
