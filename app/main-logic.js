@@ -1,6 +1,7 @@
 // RemoteClaw Main Logic — hot-updatable via GitHub
 // App is a pure UI client. Daemon handles all command execution.
 const LOGIC_VERSION = "1.1.0";
+const PKG_VERSION = "1.1.0"; // must match package.json — bump when deps change
 
 const { app, nativeImage, ipcMain } = require("electron");
 const { menubar } = require("menubar");
@@ -598,15 +599,23 @@ async function checkForUpdate() {
       fs.writeFileSync(path.join(CONFIG_DIR, "main-logic.meta.json"), JSON.stringify(meta));
       console.log(`[ota] Update staged: v${LOGIC_VERSION} → v${newVer}`);
       pendingUpdate = true;
-      // Update tray menu to show pending update
       if (mb?.tray) {
         trayMenu.items[0].label = `RemoteClaw v${LOGIC_VERSION} → v${newVer}`;
       }
-      // Show notification
-      if (Notification.isSupported()) {
-        new Notification({ title: "RemoteClaw Updated", body: `v${newVer} ready — restart to apply` }).show();
+      // Check if new version needs a DMG update (PKG_VERSION changed = deps changed)
+      const pkgMatch = remote.match(/PKG_VERSION\s*=\s*["']([^"']+)["']/);
+      const remotePkg = pkgMatch ? pkgMatch[1] : null;
+      const needsDmg = remotePkg && remotePkg !== PKG_VERSION;
+      if (needsDmg) {
+        if (Notification.isSupported()) {
+          new Notification({ title: "RemoteClaw: DMG Update Required", body: `v${remotePkg} has new dependencies — please download the new DMG` }).show();
+        }
+      } else {
+        if (Notification.isSupported()) {
+          new Notification({ title: "RemoteClaw Updated", body: `v${newVer} ready — restart to apply` }).show();
+        }
       }
-      sendToRenderer("update-available", { current: LOGIC_VERSION, next: newVer });
+      sendToRenderer("update-available", { current: LOGIC_VERSION, next: newVer, needsDmg });
     }
   } catch {}
 }
