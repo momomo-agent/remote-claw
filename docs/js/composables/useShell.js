@@ -1,4 +1,4 @@
-import { ref, onUnmounted } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
+import { ref, onUnmounted } from 'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js'
 import { state } from '../state.js'
 import { api } from '../api.js'
 

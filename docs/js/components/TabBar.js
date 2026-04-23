@@ -1,4 +1,4 @@
-import { defineComponent, h, ref } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
+import { defineComponent, h, ref } from 'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js'
 import { state, ALL_APPS, savePinnedTabs } from '../state.js'
 import { api } from '../api.js'
 

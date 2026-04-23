@@ -1,4 +1,4 @@
-import { defineComponent, h } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
+import { defineComponent, h } from 'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js'
 import { state, formatDuration } from '../state.js'
 
 export default defineComponent({

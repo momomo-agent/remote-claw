@@ -1,4 +1,4 @@
-import { defineComponent, h, ref, onMounted, nextTick, watch } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
+import { defineComponent, h, ref, onMounted, nextTick, watch } from 'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js'
 import { state } from '../state.js'
 import { refreshData } from '../api.js'
 import { useTerminal } from '../composables/useTerminal.js'

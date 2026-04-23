@@ -1,4 +1,4 @@
-import { reactive } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
+import { reactive } from 'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js'
 
 // Detect detached window mode from URL params
 const urlParams = new URLSearchParams(window.location.search)

@@ -1,4 +1,4 @@
-import { createApp, defineComponent, h, onMounted, onUnmounted, watch } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
+import { createApp, defineComponent, h, onMounted, onUnmounted, watch } from 'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js'
 import { state, ALL_APPS, isDetached, detachedTab, savePinnedTabs, showToast } from './state.js'
 import { api, refreshData, ensureConfig } from './api.js'
 import { useContextMenu } from './composables/useContextMenu.js'

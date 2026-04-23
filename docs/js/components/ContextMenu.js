@@ -1,4 +1,4 @@
-import { defineComponent, h, ref, onMounted, onUpdated } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
+import { defineComponent, h, ref, onMounted, onUpdated } from 'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js'
 
 export default defineComponent({
   name: 'ContextMenu',
