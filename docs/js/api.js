@@ -36,7 +36,7 @@ export async function refreshData() {
     apiFetch('/devices'),
     apiFetch('/history?limit=50'),
   ])
-  state.devices = Array.isArray(devices) ? devices.filter(d => !d.id.startsWith('app-')) : []
+  state.devices = Array.isArray(devices) ? devices : []
   state.history = Array.isArray(history) ? history : []
   if (state.devices.length && !state.selectedDevice) state.selectedDevice = state.devices[0].id
 }
