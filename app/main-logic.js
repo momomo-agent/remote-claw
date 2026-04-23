@@ -130,6 +130,14 @@ function sendToRenderer(channel, data) {
   if (mb?.window?.webContents) {
     mb.window.webContents.send(channel, data);
   }
+  // Broadcast shell-data/shell-exit to all independent windows (editor terminals)
+  if (channel === 'shell-data' || channel === 'shell-exit') {
+    for (const win of allIndependentWindows) {
+      if (!win.isDestroyed() && win.webContents) {
+        win.webContents.send(channel, data);
+      }
+    }
+  }
 }
 
 // ── IPC: Config ──
