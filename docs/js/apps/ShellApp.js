@@ -19,6 +19,10 @@ export default defineComponent({
     onMounted(() => {
       if (containerRef.value && state.selectedDevice) {
         shell.initTerminal(containerRef.value)
+        // Auto-connect when entering shell tab
+        if (shell.status.value === 'closed') {
+          shell.openSession()
+        }
       }
     })
 
