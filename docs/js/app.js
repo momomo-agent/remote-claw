@@ -27,23 +27,26 @@ const App = defineComponent({
       if (!app) return
       if (app.needsDevice && !state.selectedDevice) return
 
-      if (app.canDetach === 'only') {
-        if (appId === 'vscode') {
-          api.invoke('open-code-server', { device: state.selectedDevice })
-        } else if (appId === 'browser') {
-          const port = prompt('Enter port number:', '3000')
-          if (port) api.invoke('open-browser', { device: state.selectedDevice, port: parseInt(port), path: '/' })
-        } else if (appId === 'screen') {
-          api.invoke('notify', { title: 'Screen', body: 'Screen sharing coming soon' })
-        }
+      // Special handlers
+      if (appId === 'vscode') {
+        api.invoke('open-code-server', { device: state.selectedDevice })
+        return
+      }
+      if (appId === 'browser') {
+        const port = prompt('Enter port number:', '3000')
+        if (port) api.invoke('open-browser', { device: state.selectedDevice, port: parseInt(port), path: '/' })
+        return
+      }
+      if (appId === 'screen') {
+        api.invoke('notify', { title: 'Screen', body: 'Screen sharing coming soon' })
         return
       }
 
-      state.currentApp = appId
-      if (appId === 'files') {
-        const files = getFilesInstance()
-        if (!files.entries.value.length && !files.loading.value) files.loadFiles(files.path.value)
-      }
+      // Everything else opens in a new window
+      api.invoke('open-tab-window', {
+        tab: appId, device: state.selectedDevice,
+        title: `RemoteClaw — ${app.label}`,
+      })
     }
 
     function handleTabSelect({ id, detachOnly }) {
