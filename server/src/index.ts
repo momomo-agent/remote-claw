@@ -65,6 +65,18 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
+    try {
+    return await this._handle(req, env, corsHeaders);
+    } catch (e: any) {
+      console.error("Unhandled:", e.message, e.stack);
+      return new Response(JSON.stringify({ error: "internal", detail: e.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  },
+
+  async _handle(req: Request, env: Env, corsHeaders: Record<string, string>): Promise<Response> {
     // Helper to add CORS to any response
     const withCors = (res: Response) => {
       const newRes = new Response(res.body, res);
@@ -104,17 +116,9 @@ export default {
       return withCors(await hubStub(env).fetch(req));
     }
 
-    // GET /history
+    // GET /history — route to DO (avoids KV list quota)
     if (path === "/history" && req.method === "GET") {
-      const limit = parseInt(url.searchParams.get("limit") || "50");
-      const listResult = await env.HISTORY.list({ limit, prefix: "cmd:" });
-      const items = await Promise.all(
-        listResult.keys.map(async (k) => {
-          const val = await env.HISTORY.get(k.name);
-          return val ? JSON.parse(val) : null;
-        })
-      );
-      return json(items.filter(Boolean));
+      return withCors(await hubStub(env).fetch(req));
     }
 
     // POST /transfer/upload — upload file in chunks, stored in DO SQLite
@@ -179,6 +183,16 @@ export class DeviceHub {
         data TEXT,
         PRIMARY KEY (transfer_id, chunk_index)
       );
+      CREATE TABLE IF NOT EXISTS history (
+        id TEXT PRIMARY KEY,
+        device TEXT,
+        command TEXT,
+        status TEXT,
+        exit_code INTEGER,
+        created_at INTEGER,
+        completed_at INTEGER,
+        duration INTEGER
+      );
     `);
     // Cleanup expired transfers every 5 minutes
     state.storage.setAlarm(Date.now() + 300000);
@@ -208,6 +222,16 @@ export class DeviceHub {
       const [client, server] = Object.values(pair);
       this.handleWs(server, deviceName, role);
       return new Response(null, { status: 101, webSocket: client });
+    }
+
+    // GET /history — from SQLite
+    if (path === "/history") {
+      const limit = parseInt(url.searchParams.get("limit") || "50");
+      const rows = [...this.sql.exec(`SELECT id, device, command, status, exit_code, created_at, completed_at, duration FROM history ORDER BY created_at DESC LIMIT ?`, limit)];
+      return json(rows.map((r: any) => ({
+        id: r.id, device: r.device, command: r.command, status: r.status,
+        exitCode: r.exit_code, createdAt: r.created_at, completedAt: r.completed_at, duration: r.duration,
+      })));
     }
 
     // GET /devices
@@ -432,16 +456,12 @@ export class DeviceHub {
   }
 
   private async saveHistory(task: Task) {
-    const key = `cmd:${String(9999999999999 - task.createdAt).padStart(13, "0")}:${task.id}`;
-    await this.env.HISTORY.put(key, JSON.stringify({
-      id: task.id,
-      device: task.device,
-      command: task.command,
-      status: task.status,
-      exitCode: task.exitCode,
-      createdAt: task.createdAt,
-      completedAt: task.completedAt,
-      duration: task.completedAt ? task.completedAt - task.createdAt : null,
-    }), { expirationTtl: 86400 * 30 });
+    const duration = task.completedAt ? task.completedAt - task.createdAt : null;
+    this.sql.exec(
+      `INSERT OR REPLACE INTO history (id, device, command, status, exit_code, created_at, completed_at, duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      task.id, task.device, task.command, task.status, task.exitCode, task.createdAt, task.completedAt, duration
+    );
+    // Prune old entries (keep last 500)
+    this.sql.exec(`DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY created_at DESC LIMIT 500)`);
   }
 }
