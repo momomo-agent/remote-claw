@@ -45,7 +45,7 @@ export default defineComponent({
 
     return () => {
       const deviceApps = ALL_APPS.filter(a => a.needsDevice && a.id !== 'apps' && a.id !== 'settings')
-      const systemApps = ALL_APPS.filter(a => !a.needsDevice && a.id !== 'apps' && a.id !== 'settings')
+      const systemApps = ALL_APPS.filter(a => !a.needsDevice && a.id !== 'apps')
 
       return h('div', null, [
         // Device apps

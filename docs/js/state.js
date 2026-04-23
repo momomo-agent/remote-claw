@@ -19,10 +19,10 @@ export const ALL_APPS = [
   { id: 'devices',  label: 'Devices',  icon: '📡', canDetach: false, needsDevice: false },
   { id: 'history',  label: 'History',  icon: '📋', canDetach: false, needsDevice: false },
   { id: 'apps',     label: 'Apps',     icon: '⊞',  canDetach: false, needsDevice: false },
-  { id: 'settings', label: '⚙',       icon: '⚙',  canDetach: false, needsDevice: false },
+  { id: 'settings', label: 'Settings', icon: '⚙',  canDetach: false, needsDevice: false },
 ]
 
-const DEFAULT_PINNED = ['shell', 'files', 'apps', 'devices', 'settings']
+const DEFAULT_PINNED = ['devices', 'shell', 'files', 'apps']
 
 function loadPinned() {
   try { return JSON.parse(localStorage.getItem('rc-pinned-tabs')) || DEFAULT_PINNED }
@@ -30,7 +30,7 @@ function loadPinned() {
 }
 
 export const state = reactive({
-  currentApp: detachedTab || 'shell',
+  currentApp: detachedTab || 'devices',
   connected: false,
   serverUrl: '',
   devices: [],
@@ -39,6 +39,7 @@ export const state = reactive({
   configRaw: null,
   pinned: false,
   pinnedTabs: loadPinned(),
+  daemonRunning: false,
 })
 
 export function savePinnedTabs() {

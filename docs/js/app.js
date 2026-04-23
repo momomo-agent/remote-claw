@@ -173,6 +173,10 @@ const App = defineComponent({
               onClick: () => api.toggleConnection(),
             }),
             h(DeviceSelect, { detached: false, onChange: handleDeviceChange }),
+            h('div', {
+              class: ['daemon-badge', state.daemonRunning ? 'running' : 'stopped'],
+              title: state.daemonRunning ? 'Daemon running' : 'Daemon stopped',
+            }, state.daemonRunning ? '● Daemon' : '○ Daemon'),
           ]),
           h('div', { class: 'titlebar-right' },
             state.pinned

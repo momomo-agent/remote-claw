@@ -308,6 +308,7 @@ ipcMain.handle("win-is-always-on-top", () => mb?.window?.isAlwaysOnTop());
 ipcMain.handle("win-minimize", () => { if (mb?.window) mb.window.minimize(); });
 ipcMain.handle("win-maximize", () => { if (mb?.window) { mb.window.isMaximized() ? mb.window.unmaximize() : mb.window.maximize(); } return { maximized: mb?.window?.isMaximized() }; });
 ipcMain.handle("win-set-title", (_, { title }) => { if (mb?.window) mb.window.setTitle(title); });
+ipcMain.handle("daemon-status", () => ({ running: isDaemonRunning() }));
 ipcMain.handle("win-set-opacity", (_, { opacity }) => { if (mb?.window) mb.window.setOpacity(opacity); });
 ipcMain.handle("win-open-devtools", () => { if (mb?.window) mb.window.webContents.openDevTools({ mode: "detach" }); });
 

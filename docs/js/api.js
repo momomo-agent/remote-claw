@@ -32,6 +32,11 @@ export async function refreshData() {
   const cfg = await electronAPI.getConfig()
   state.connected = cfg.connected
   state.configRaw = cfg.raw || null
+  // Check daemon status
+  try {
+    const ds = await electronAPI.invoke('daemon-status')
+    state.daemonRunning = ds?.running || false
+  } catch { state.daemonRunning = false }
   const [devices, history] = await Promise.all([
     apiFetch('/devices'),
     apiFetch('/history?limit=50'),
