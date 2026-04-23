@@ -154,6 +154,7 @@ interface DeviceConn {
 
 export class DeviceHub {
   private devices = new Map<string, DeviceConn>();
+  private clients = new Map<string, DeviceConn>();
   private tasks = new Map<string, Task>();
   private taskResolvers = new Map<string, (t: Task) => void>();
   private env: Env;
@@ -200,11 +201,12 @@ export class DeviceHub {
       const token = url.searchParams.get("token");
       if (token !== this.env.REMOTECLAW_TOKEN) return err("unauthorized", 401);
       const deviceName = url.searchParams.get("device");
+      const role = url.searchParams.get("role") || "device"; // "device" or "client"
       if (!deviceName) return err("device param required");
 
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
-      this.handleWs(server, deviceName);
+      this.handleWs(server, deviceName, role);
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -346,11 +348,20 @@ export class DeviceHub {
     return err("not found", 404);
   }
 
-  private handleWs(ws: WebSocket, deviceName: string) {
+  private handleWs(ws: WebSocket, deviceName: string, role: string) {
     ws.accept();
     const deviceId = deviceName;
+    const isClient = role === "client";
 
-    this.devices.set(deviceId, { ws, name: deviceName, connectedAt: Date.now() });
+    // Only register as device if role=device (daemon)
+    if (!isClient) {
+      this.devices.set(deviceId, { ws, name: deviceName, connectedAt: Date.now() });
+    }
+    // Clients get tracked separately for message relay
+    if (isClient) {
+      if (!this.clients) this.clients = new Map();
+      this.clients.set(deviceId, { ws, name: deviceName, connectedAt: Date.now() });
+    }
 
     ws.addEventListener("message", (event) => {
       try {
@@ -370,9 +381,9 @@ export class DeviceHub {
         }
         if (msg.type === "ping") ws.send(JSON.stringify({ type: "pong" }));
 
-        // File transfer relay — forward between devices
+        // File transfer relay — forward between devices/clients
         if (msg.type === "file-start" || msg.type === "file-chunk" || msg.type === "file-end") {
-          const target = this.devices.get(msg.to);
+          const target = this.devices.get(msg.to) || this.clients?.get(msg.to);
           if (target) {
             target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
           } else {
@@ -380,19 +391,19 @@ export class DeviceHub {
           }
         }
 
-        // Shell session relay — forward between devices
+        // Shell session relay — forward between devices/clients
         if (msg.type === "shell-open" || msg.type === "shell-input" || msg.type === "shell-resize" || msg.type === "shell-close" ||
             msg.type === "shell-data" || msg.type === "shell-exit") {
-          const target = this.devices.get(msg.to);
+          const target = this.devices.get(msg.to) || this.clients?.get(msg.to);
           if (target) {
             target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
           }
         }
 
-        // Screen capture relay — forward between devices
+        // Screen capture relay — forward between devices/clients
         if (msg.type === "screen-start" || msg.type === "screen-stop" || msg.type === "screen-input" ||
             msg.type === "screen-frame") {
-          const target = this.devices.get(msg.to);
+          const target = this.devices.get(msg.to) || this.clients?.get(msg.to);
           if (target) {
             target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
           }
@@ -401,7 +412,7 @@ export class DeviceHub {
         // HTTP/WS proxy relay — forward between app and device
         if (msg.type === "http-proxy-request" || msg.type === "http-proxy-response" ||
             msg.type === "ws-proxy-open" || msg.type === "ws-proxy-data" || msg.type === "ws-proxy-close") {
-          const target = this.devices.get(msg.to);
+          const target = this.devices.get(msg.to) || this.clients?.get(msg.to);
           if (target) {
             target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
           }
@@ -411,10 +422,12 @@ export class DeviceHub {
 
     ws.addEventListener("close", () => {
       this.devices.delete(deviceId);
+      this.clients?.delete(deviceId);
     });
 
     ws.addEventListener("error", () => {
       this.devices.delete(deviceId);
+      this.clients?.delete(deviceId);
     });
   }
 

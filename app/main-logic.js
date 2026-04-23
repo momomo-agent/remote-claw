@@ -106,7 +106,7 @@ let manualDisconnect = false;
 
 function connectDaemon() {
   const appDeviceId = `app-${config.deviceName || os.hostname()}`;
-  const url = `${config.server}/ws?device=${encodeURIComponent(appDeviceId)}&token=${encodeURIComponent(config.token)}`;
+  const url = `${config.server}/ws?device=${encodeURIComponent(appDeviceId)}&token=${encodeURIComponent(config.token)}&role=client`;
   daemonWs = new WebSocket(url);
 
   daemonWs.on("open", () => {
