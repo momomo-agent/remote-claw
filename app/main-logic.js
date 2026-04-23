@@ -13,6 +13,8 @@ const os = require("os");
 const APP_DIR = path.join(path.dirname(app.getPath('exe')), '..', 'Resources', 'app.asar');
 const LOADING_HTML = path.join(APP_DIR, "loading.html");
 
+// Use system proxy for Chromium network stack (fetch/XHR in renderer)
+app.commandLine.appendSwitch('proxy-auto-detect');
 function loadWithSplash(win, targetUrl) {
   win.loadFile(LOADING_HTML);
   win.webContents.on('did-finish-load', function onSplash() {
@@ -180,12 +182,62 @@ let isPinned = false;
 let trayBounds = null;
 let manualDisconnect = false;
 
+// ── System Proxy Detection ──
+
+function getSystemProxy() {
+  try {
+    // Read macOS system HTTP proxy
+    const out = execSync('scutil --proxy', { encoding: 'utf-8', timeout: 3000 });
+    // Check HTTPS first, then HTTP
+    for (const proto of ['HTTPS', 'HTTP']) {
+      const enabled = out.match(new RegExp(`${proto}Enable\\s*:\\s*(\\d)`));
+      if (enabled && enabled[1] === '1') {
+        const host = out.match(new RegExp(`${proto}Proxy\\s*:\\s*(\\S+)`));
+        const port = out.match(new RegExp(`${proto}Port\\s*:\\s*(\\d+)`));
+        if (host && port) {
+          const url = `http://${host[1]}:${port[1]}`;
+          console.log(`[proxy] System proxy detected: ${url}`);
+          return url;
+        }
+      }
+    }
+    // Check SOCKS proxy
+    const socksEnabled = out.match(/SOCKSEnable\s*:\s*(\d)/);
+    if (socksEnabled && socksEnabled[1] === '1') {
+      const host = out.match(/SOCKSProxy\s*:\s*(\S+)/);
+      const port = out.match(/SOCKSPort\s*:\s*(\d+)/);
+      if (host && port) {
+        const url = `socks5://${host[1]}:${port[1]}`;
+        console.log(`[proxy] System SOCKS proxy detected: ${url}`);
+        return url;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function createProxyAgent(proxyUrl) {
+  if (!proxyUrl) return undefined;
+  try {
+    if (proxyUrl.startsWith('socks')) {
+      // socks not supported by https-proxy-agent, skip
+      return undefined;
+    }
+    const { HttpsProxyAgent } = require('https-proxy-agent');
+    return new HttpsProxyAgent(proxyUrl);
+  } catch { return undefined; }
+}
+
+
 // ── Client WS (subscribe only, no command execution) ──
 
 function connectClient() {
   const clientId = `app-${os.hostname()}`;
   const url = `${config.server}/ws?device=${encodeURIComponent(clientId)}&token=${encodeURIComponent(config.token)}&role=client`;
-  clientWs = new WebSocket(url);
+  const proxyUrl = getSystemProxy();
+  const agent = createProxyAgent(proxyUrl);
+  const wsOpts = agent ? { agent } : {};
+  clientWs = new WebSocket(url, wsOpts);
 
   clientWs.on("open", () => {
     connected = true;
