@@ -467,12 +467,7 @@ ipcMain.handle("open-tab-window", (_, { tab, device, title }) => {
     webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false, preload: path.join(APP_DIR, "preload.js") },
   });
 
-  const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
-  const url = new URL(CLOUD_URL);
-  url.searchParams.set("tab", tab);
-  url.searchParams.set("device", device || "");
-  url.searchParams.set("detached", "1");
-  loadWithSplash(win, url.toString());
+  loadWithSplash(win, getCachedUIUrl({ tab, device: device || "", detached: "1" }));
 
   detachedWindows.set(tab, win);
   trackIndependentWindow(win);
@@ -482,7 +477,6 @@ ipcMain.handle("open-tab-window", (_, { tab, device, title }) => {
 
 ipcMain.handle("open-preview", (_, { file, device, title }) => {
   const { BrowserWindow } = require("electron");
-  const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
   const win = new BrowserWindow({
     width: 900, height: 620, minWidth: 600, minHeight: 400,
     title: title || `Preview \u2014 ${file.split('/').pop()}`,
@@ -491,7 +485,9 @@ ipcMain.handle("open-preview", (_, { file, device, title }) => {
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false, preload: path.join(APP_DIR, "preload.js") },
   });
-  const url = new URL(CLOUD_URL + "preview.html");
+  const cachedPreview = path.join(UI_CACHE_DIR, "preview.html");
+  const previewBase = fs.existsSync(cachedPreview) ? `file://${cachedPreview}` : CLOUD_URL + "preview.html";
+  const url = new URL(previewBase);
   url.searchParams.set("file", file);
   url.searchParams.set("device", device || "");
   loadWithSplash(win, url.toString());
@@ -501,7 +497,8 @@ ipcMain.handle("open-preview", (_, { file, device, title }) => {
 
 ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
   const { BrowserWindow } = require("electron");
-  const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
+  const cachedEditor = path.join(UI_CACHE_DIR, "editor.html");
+  const editorBase = fs.existsSync(cachedEditor) ? `file://${cachedEditor}` : CLOUD_URL + "editor.html";
   const win = new BrowserWindow({
     width: 1100, height: 700, minWidth: 700, minHeight: 500,
     title: title || "RemoteClaw Editor",
@@ -510,7 +507,7 @@ ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false, preload: path.join(APP_DIR, "preload.js") },
   });
-  const url = new URL(CLOUD_URL + "editor.html");
+  const url = new URL(editorBase);
   if (dir) url.searchParams.set("dir", dir);
   if (file) url.searchParams.set("file", file);
   if (device) url.searchParams.set("device", device);
@@ -671,10 +668,66 @@ async function checkForUpdate() {
 }
 
 setTimeout(checkForUpdate, 5000);
+setTimeout(cacheCloudUI, 3000); // Cache UI files on startup
 
 // Check daemon updates every 30 minutes
 setInterval(updateDaemon, 30 * 60 * 1000);
 setTimeout(updateDaemon, 60000); // First check after 1 min
+
+// ── UI Cache ──
+const UI_CACHE_DIR = path.join(CONFIG_DIR, "ui-cache");
+const UI_FILES = [
+  "index.html",
+  "preview.html",
+  "js/app.js",
+  "js/state.js",
+  "js/api.js",
+  "js/components/TabBar.js",
+  "js/components/DeviceSelect.js",
+  "js/components/ContextMenu.js",
+  "js/composables/useContextMenu.js",
+  "js/composables/useShell.js",
+  "js/composables/useFiles.js",
+  "js/apps/ShellApp.js",
+  "js/apps/FilesApp.js",
+  "js/apps/NetworkApp.js",
+  "js/apps/ClawApp.js",
+  "js/apps/DevicesApp.js",
+  "js/apps/HistoryApp.js",
+  "js/apps/AppsApp.js",
+  "js/apps/SettingsApp.js",
+];
+
+async function cacheCloudUI() {
+  if (!fs.existsSync(UI_CACHE_DIR)) fs.mkdirSync(UI_CACHE_DIR, { recursive: true });
+  const base = "https://raw.githubusercontent.com/momomo-agent/remote-claw/main/docs/";
+  let updated = 0;
+  for (const file of UI_FILES) {
+    try {
+      const res = await fetch(base + file, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const text = await res.text();
+      const localPath = path.join(UI_CACHE_DIR, file);
+      const dir = path.dirname(localPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const existing = fs.existsSync(localPath) ? fs.readFileSync(localPath, "utf-8") : "";
+      if (text !== existing) { fs.writeFileSync(localPath, text); updated++; }
+    } catch {}
+  }
+  if (updated > 0) console.log(`[ui-cache] Updated ${updated} files`);
+}
+
+function getCachedUIUrl(params = {}) {
+  const cached = path.join(UI_CACHE_DIR, "index.html");
+  if (fs.existsSync(cached)) {
+    const url = new URL(`file://${cached}`);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+    return url.toString();
+  }
+  const url = new URL(CLOUD_URL);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  return url.toString();
+}
 
 // ── Menubar ──
 
@@ -772,6 +825,17 @@ mb.on("after-create-window", () => {
 
   function loadCloudUI() {
     uiLoaded = false;
+    // Try cached UI first (instant), fall back to cloud
+    const cachedIndex = path.join(UI_CACHE_DIR, "index.html");
+    if (fs.existsSync(cachedIndex)) {
+      console.log("[ui] Loading cached UI");
+      sendToRenderer("loading-progress", { pct: 80, msg: "Loading cached UI...", detail: "Local cache" });
+      mb.window.loadURL(`file://${cachedIndex}`);
+      // Background refresh cache for next time
+      cacheCloudUI().catch(() => {});
+      return;
+    }
+
     console.log("[ui] Loading cloud UI:", CLOUD_URL);
     sendToRenderer("loading-progress", { pct: 30, msg: "Connecting to server...", detail: CLOUD_URL.replace('https://', '') });
 
