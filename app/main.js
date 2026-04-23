@@ -1,17 +1,23 @@
 // RemoteClaw Bootstrap — never needs updating
 // Fetches latest main-logic.js from GitHub, falls back to bundled version
+// Update strategy: bundled always works, cached only used if validated
 
 const { app, ipcMain } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
+const crypto = require("crypto");
 
-const LOGIC_URL = "https://raw.githubusercontent.com/momomo-agent/remote-claw/main/app/main-logic.js";
+const LOGIC_URLS = [
+  "https://raw.githubusercontent.com/momomo-agent/remote-claw/main/app/main-logic.js",
+  "https://cdn.jsdelivr.net/gh/momomo-agent/remote-claw@main/app/main-logic.js",
+];
 const LOCAL_LOGIC = path.join(__dirname, "main-logic.js");
 const CACHE_DIR = path.join(require("os").homedir(), ".remoteclaw");
 const CACHED_LOGIC = path.join(CACHE_DIR, "main-logic.js");
+const CACHED_META = path.join(CACHE_DIR, "main-logic.meta.json");
 
-function fetchText(url, timeout = 5000) {
+function fetchText(url, timeout = 8000) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, { timeout }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -27,21 +33,65 @@ function fetchText(url, timeout = 5000) {
   });
 }
 
+function isValidLogic(code) {
+  // Must be JS, not HTML error page or truncated
+  if (!code || code.length < 500) return false;
+  if (code.startsWith("<") || code.startsWith("<!DOCTYPE")) return false;
+  if (!code.includes("connectDaemon") || !code.includes("ipcMain")) return false;
+  return true;
+}
+
+function sha256(str) { return crypto.createHash("sha256").update(str).digest("hex"); }
+
+async function fetchLatest() {
+  for (const url of LOGIC_URLS) {
+    try {
+      const code = await fetchText(url);
+      if (isValidLogic(code)) return code;
+      console.log(`[bootstrap] Invalid content from ${url}, trying next...`);
+    } catch (e) {
+      console.log(`[bootstrap] ${url} failed: ${e.message}`);
+    }
+  }
+  return null;
+}
+
 async function loadLogic() {
-  // Try fetch latest from GitHub
+  if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+
+  // Try fetch latest from GitHub (non-blocking for startup)
   try {
-    const code = await fetchText(LOGIC_URL);
-    if (code && code.length > 100) {
-      if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-      fs.writeFileSync(CACHED_LOGIC, code);
-      console.log("[bootstrap] Updated main-logic.js from GitHub");
+    const code = await fetchLatest();
+    if (code) {
+      const hash = sha256(code);
+      // Only write if different from cached
+      let cachedHash = "";
+      try { cachedHash = JSON.parse(fs.readFileSync(CACHED_META, "utf-8")).hash; } catch {}
+      if (hash !== cachedHash) {
+        fs.writeFileSync(CACHED_LOGIC, code);
+        fs.writeFileSync(CACHED_META, JSON.stringify({ hash, updatedAt: new Date().toISOString(), size: code.length }));
+        console.log(`[bootstrap] Updated main-logic.js (${code.length} bytes)`);
+      } else {
+        console.log("[bootstrap] main-logic.js is up to date");
+      }
     }
   } catch (e) {
-    console.log("[bootstrap] GitHub fetch failed, using cached/bundled:", e.message);
+    console.log("[bootstrap] Update check failed:", e.message);
   }
 
-  // Priority: cached (latest from GitHub) > bundled
-  const logicPath = fs.existsSync(CACHED_LOGIC) ? CACHED_LOGIC : LOCAL_LOGIC;
+  // Priority: validated cached > bundled
+  let logicPath = LOCAL_LOGIC;
+  if (fs.existsSync(CACHED_LOGIC)) {
+    try {
+      const cached = fs.readFileSync(CACHED_LOGIC, "utf-8");
+      if (isValidLogic(cached)) {
+        logicPath = CACHED_LOGIC;
+      } else {
+        console.log("[bootstrap] Cached logic invalid, removing");
+        fs.unlinkSync(CACHED_LOGIC);
+      }
+    } catch {}
+  }
   console.log("[bootstrap] Loading:", logicPath);
 
   // Ensure cached logic can find node_modules from app directory
@@ -74,15 +124,16 @@ ipcMain.handle("restart", () => {
 // Self-update: fetch latest logic + restart
 ipcMain.handle("self-update", async () => {
   try {
-    const code = await fetchText(LOGIC_URL);
-    if (code && code.length > 100) {
+    const code = await fetchLatest();
+    if (code) {
       if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
       fs.writeFileSync(CACHED_LOGIC, code);
+      fs.writeFileSync(CACHED_META, JSON.stringify({ hash: sha256(code), updatedAt: new Date().toISOString(), size: code.length }));
       app.relaunch();
       app.exit(0);
       return { ok: true };
     }
-    return { error: "empty response" };
+    return { error: "no valid source available" };
   } catch (e) {
     return { error: e.message };
   }
