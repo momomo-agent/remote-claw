@@ -78,10 +78,17 @@ async function fetchLatest() {
 async function loadLogic() {
   if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
 
-  // Step 1: Crash detection — did last boot fail?
-  const lastBootCrashed = fs.existsSync(BOOT_LOCK);
+  // Step 1: Crash detection — did last boot fail within 30s?
+  let lastBootCrashed = false;
+  if (fs.existsSync(BOOT_LOCK)) {
+    try {
+      const lockTime = parseInt(fs.readFileSync(BOOT_LOCK, "utf-8").trim());
+      lastBootCrashed = Date.now() - lockTime < 30000; // Only crash if lock < 30s old
+    } catch { lastBootCrashed = false; }
+    try { fs.unlinkSync(BOOT_LOCK); } catch {} // Always clean up stale lock
+  }
   if (lastBootCrashed) {
-    console.log("[bootstrap] Last boot crashed — rolling back to bundled");
+    console.log("[bootstrap] Last boot crashed within 30s — rolling back to bundled");
     // Remove staging and cached to force bundled
     try { fs.unlinkSync(STAGING_LOGIC); } catch {}
     try { fs.unlinkSync(CACHED_LOGIC); } catch {}
