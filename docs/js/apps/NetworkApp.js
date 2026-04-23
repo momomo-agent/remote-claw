@@ -45,7 +45,7 @@ export default defineComponent({
       const [ip, local, ping] = await Promise.all([
         execOnDevice('curl -s --max-time 5 ifconfig.me'),
         execOnDevice('networksetup -getinfo Wi-Fi 2>/dev/null || ip addr show 2>/dev/null | head -20'),
-        execOnDevice('ping -c 1 -W 2 8.8.8.8 2>&1 | tail -1'),
+        execOnDevice('/sbin/ping -c 1 -W 2 8.8.8.8 2>&1 | tail -1'),
       ])
       publicIp.value = ip || 'N/A'
       localInfo.value = local || 'N/A'

@@ -522,6 +522,7 @@ ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
 ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
   const { BrowserWindow, Notification } = require("electron");
   const { startCodeServerProxy } = require("./code-server-proxy");
+  const remotePort = port || 8080;
 
   let server = "wss://remote.momomo.dev";
   let token = "";
@@ -532,7 +533,36 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
   } catch {}
 
   try {
-    const proxy = await startCodeServerProxy({ server, token, device, remotePort: port || 8080 });
+    // Ensure code-server is running on remote device
+    const httpBase = server.replace("wss://", "https://").replace("ws://", "http://");
+    const checkCmd = `lsof -i :${remotePort} -sTCP:LISTEN -t 2>/dev/null`;
+    const checkRes = await fetch(`${httpBase}/exec`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ device, command: checkCmd, oneshot: true, timeout: 5000 }),
+      signal: AbortSignal.timeout(8000),
+    }).then(r => r.json()).catch(() => null);
+
+    if (!checkRes?.stdout?.trim()) {
+      // code-server not running, try to start it
+      console.log(`[vscode] code-server not running on ${device}:${remotePort}, starting...`);
+      const startCmd = `(which code-server >/dev/null 2>&1 && nohup code-server --bind-addr 0.0.0.0:${remotePort} --auth none >/tmp/code-server.log 2>&1 &) || echo '__NOT_INSTALLED__'`;
+      const startRes = await fetch(`${httpBase}/exec`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ device, command: startCmd, oneshot: true, timeout: 10000 }),
+        signal: AbortSignal.timeout(12000),
+      }).then(r => r.json()).catch(() => null);
+
+      if (startRes?.stdout?.includes('__NOT_INSTALLED__')) {
+        new Notification({ title: "VS Code", body: `code-server not installed on ${device}. Run: brew install code-server` }).show();
+        return { error: "code-server not installed" };
+      }
+      // Wait a moment for code-server to start
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    const proxy = await startCodeServerProxy({ server, token, device, remotePort });
     const codeUrl = proxy.url + (folder ? `/?folder=${encodeURIComponent(folder)}` : "");
 
     const win = new BrowserWindow({
@@ -548,7 +578,7 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
     trackIndependentWindow(win);
     return { ok: true };
   } catch (e) {
-    new Notification({ title: "VS Code", body: `Failed to connect: ${e.message}` }).show();
+    new Notification({ title: "VS Code", body: `Failed: ${e.message}` }).show();
     return { error: e.message };
   }
 });
