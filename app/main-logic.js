@@ -4,6 +4,7 @@
 const { app, nativeImage, ipcMain } = require("electron");
 const { menubar } = require("menubar");
 const path = require("path");
+const { spawn, execSync } = require("child_process");
 const WebSocket = require("ws");
 const fs = require("fs");
 const os = require("os");
@@ -35,6 +36,111 @@ function loadConfig() {
 
 const config = loadConfig();
 const httpBase = config.server.replace("wss://", "https://").replace("ws://", "http://");
+
+// ── Daemon Management ──
+
+const DAEMON_DIR = path.join(CONFIG_DIR, "daemon");
+const DAEMON_ENTRY = path.join(DAEMON_DIR, "daemon", "daemon.js");
+const DAEMON_PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
+const LAUNCHAGENT_PLIST = path.join(os.homedir(), "Library", "LaunchAgents", "dev.momomo.remoteclaw.plist");
+
+function isDaemonRunning() {
+  try {
+    const pid = parseInt(fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim());
+    if (!pid) return false;
+    process.kill(pid, 0); // signal 0 = check if alive
+    return true;
+  } catch { return false; }
+}
+
+function installDaemon() {
+  // Clone/update daemon from repo
+  if (!fs.existsSync(path.join(DAEMON_DIR, ".git"))) {
+    console.log("[daemon] Installing daemon...");
+    try {
+      execSync(`git clone --depth 1 https://github.com/momomo-agent/remote-claw.git "${DAEMON_DIR}"`, { timeout: 30000, stdio: "pipe" });
+    } catch (e) {
+      console.log("[daemon] Clone failed:", e.message);
+      return false;
+    }
+  }
+  // npm install
+  const daemonPkgDir = path.join(DAEMON_DIR, "daemon");
+  if (!fs.existsSync(path.join(daemonPkgDir, "node_modules"))) {
+    try {
+      execSync("npm install --production", { cwd: daemonPkgDir, timeout: 60000, stdio: "pipe" });
+    } catch (e) {
+      console.log("[daemon] npm install failed:", e.message);
+      return false;
+    }
+  }
+  return fs.existsSync(DAEMON_ENTRY);
+}
+
+function startDaemon() {
+  if (isDaemonRunning()) { console.log("[daemon] Already running"); return; }
+  if (!fs.existsSync(DAEMON_ENTRY) && !installDaemon()) return;
+
+  console.log("[daemon] Starting...");
+  const child = spawn(process.execPath.includes("Electron") ? "node" : process.execPath, [DAEMON_ENTRY], {
+    detached: true,
+    stdio: ["ignore", fs.openSync(path.join(CONFIG_DIR, "daemon.log"), "a"), fs.openSync(path.join(CONFIG_DIR, "daemon.log"), "a")],
+    env: { ...process.env, HOME: os.homedir(), PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
+  });
+  child.unref();
+  fs.writeFileSync(DAEMON_PID_FILE, String(child.pid));
+  console.log(`[daemon] Started (pid ${child.pid})`);
+
+  // Install LaunchAgent for auto-start on boot
+  installLaunchAgent();
+}
+
+function installLaunchAgent() {
+  const nodePath = "/opt/homebrew/bin/node";
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.momomo.remoteclaw</string>
+  <key>ProgramArguments</key><array>
+    <string>${nodePath}</string>
+    <string>${DAEMON_ENTRY}</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${CONFIG_DIR}/daemon.log</string>
+  <key>StandardErrorPath</key><string>${CONFIG_DIR}/daemon.log</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>`;
+  try {
+    const agentDir = path.dirname(LAUNCHAGENT_PLIST);
+    if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(LAUNCHAGENT_PLIST, plist);
+    execSync(`launchctl unload "${LAUNCHAGENT_PLIST}" 2>/dev/null; launchctl load "${LAUNCHAGENT_PLIST}"`, { stdio: "pipe" });
+    console.log("[daemon] LaunchAgent installed");
+  } catch (e) {
+    console.log("[daemon] LaunchAgent install failed:", e.message);
+  }
+}
+
+function updateDaemon() {
+  if (!fs.existsSync(path.join(DAEMON_DIR, ".git"))) return;
+  try {
+    const result = execSync("git pull --quiet 2>&1", { cwd: DAEMON_DIR, timeout: 15000, encoding: "utf-8" });
+    if (result.includes("Already up to date")) return;
+    console.log("[daemon] Updated, restarting...");
+    // Kill old daemon, LaunchAgent will restart it
+    try {
+      const pid = parseInt(fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim());
+      process.kill(pid, "SIGTERM");
+    } catch {}
+  } catch (e) {
+    console.log("[daemon] Update check failed:", e.message);
+  }
+}
 
 // ── Tray icon ──
 
@@ -382,6 +488,18 @@ async function checkForUpdate() {
 
 setTimeout(checkForUpdate, 5000);
 
+// Check daemon updates every 30 minutes
+setInterval(updateDaemon, 30 * 60 * 1000);
+setTimeout(updateDaemon, 60000); // First check after 1 min
+
+// IPC: Daemon management
+ipcMain.handle("daemon-status", () => ({ running: isDaemonRunning(), installed: fs.existsSync(DAEMON_ENTRY) }));
+ipcMain.handle("daemon-restart", () => {
+  try { const pid = parseInt(fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim()); process.kill(pid, "SIGTERM"); } catch {}
+  setTimeout(startDaemon, 1000);
+  return { ok: true };
+});
+
 // ── Menubar ──
 
 const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
@@ -410,6 +528,22 @@ mb = menubar({
 
 mb.on("ready", () => {
   connectClient();
+  startDaemon(); // Ensure daemon is running
+
+  // Auto-install rclaw CLI
+  try {
+    const cliSrc = path.join(DAEMON_DIR, "cli", "rclaw.js");
+    if (fs.existsSync(cliSrc)) {
+      const cliDst = "/usr/local/bin/rclaw";
+      try { fs.unlinkSync(cliDst); } catch {}
+      try { fs.symlinkSync(cliSrc, cliDst); } catch {
+        const userBin = path.join(os.homedir(), ".local", "bin", "rclaw");
+        fs.mkdirSync(path.dirname(userBin), { recursive: true });
+        try { fs.unlinkSync(userBin); } catch {}
+        try { fs.symlinkSync(cliSrc, userBin); } catch {}
+      }
+    }
+  } catch {}
 
   const { Menu } = require("electron");
   let trayMenu = Menu.buildFromTemplate([

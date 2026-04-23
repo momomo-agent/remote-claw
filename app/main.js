@@ -40,7 +40,7 @@ function writeMeta(obj) {
 function isValidLogic(code) {
   if (!code || code.length < 500) return false;
   if (code.startsWith("<") || code.startsWith("<!DOCTYPE")) return false;
-  if (!code.includes("connectDaemon") || !code.includes("ipcMain")) return false;
+  if (!code.includes("connectClient") || !code.includes("ipcMain")) return false;
   return true;
 }
 
