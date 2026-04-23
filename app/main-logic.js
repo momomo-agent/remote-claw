@@ -541,7 +541,7 @@ ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
 
 ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
   const { BrowserWindow, Notification } = require("electron");
-  const { startCodeServerProxy } = require("./code-server-proxy");
+  const { startCodeServerProxy } = require(path.join(APP_DIR, "code-server-proxy"));
   const remotePort = port || 8080;
 
   let server = "wss://remote.momomo.dev";
@@ -576,7 +576,7 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
 
 ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
   const { BrowserWindow } = require("electron");
-  const { startCodeServerProxy } = require("./code-server-proxy");
+  const { startCodeServerProxy } = require(path.join(APP_DIR, "code-server-proxy"));
 
   let server = "wss://remote.momomo.dev";
   let token = "";
