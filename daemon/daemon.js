@@ -122,7 +122,7 @@ function execCommand(taskId, command) {
     env: {
       ...process.env,
       HOME: os.homedir(),
-      PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}`,
+      PATH: `${os.homedir()}/.nvm/versions/node/current/bin:${os.homedir()}/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}`,
     },
     timeout: 60000,
   });

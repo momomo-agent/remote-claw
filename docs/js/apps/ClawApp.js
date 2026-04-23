@@ -42,8 +42,9 @@ export default defineComponent({
         execOnDevice('openclaw gateway logs --tail 50 2>/dev/null || journalctl -u openclaw --no-pager -n 50 2>/dev/null || echo "No logs available"'),
       ])
 
-      statusRaw.value = s || 'Unable to reach openclaw'
-      gatewayRaw.value = g || 'Unknown'
+      const notInstalled = s?.includes('command not found') || s?.includes('not found')
+      statusRaw.value = notInstalled ? 'OpenClaw not installed on this device' : (s || 'Unable to reach device')
+      gatewayRaw.value = notInstalled ? '' : (g || 'Unknown')
       logs.value = l || ''
 
       // Parse status for current model
