@@ -353,7 +353,7 @@ ipcMain.handle("open-tab-window", (_, { tab, device, title }) => {
     backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
-    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false, preload: path.join(APP_DIR, "preload.js") },
   });
 
   const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
@@ -378,7 +378,7 @@ ipcMain.handle("open-preview", (_, { file, device, title }) => {
     backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
-    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false, preload: path.join(APP_DIR, "preload.js") },
   });
   const url = new URL(CLOUD_URL + "preview.html");
   url.searchParams.set("file", file);
@@ -397,7 +397,7 @@ ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
     backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
-    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false, preload: path.join(APP_DIR, "preload.js") },
   });
   const url = new URL(CLOUD_URL + "editor.html");
   if (dir) url.searchParams.set("dir", dir);
@@ -523,7 +523,7 @@ mb = menubar({
   browserWindow: {
     width: 380, height: 580,
     resizable: true,
-    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false, preload: path.join(APP_DIR, "preload.js") },
     backgroundColor: '#161618',
     skipTaskbar: true,
     frame: false,
