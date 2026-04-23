@@ -598,12 +598,25 @@ mb.on("after-create-window", () => {
   function loadCloudUI() {
     uiLoaded = false;
     console.log("[ui] Loading cloud UI:", CLOUD_URL);
+    sendToRenderer("loading-progress", { pct: 30, msg: "Connecting to server...", detail: CLOUD_URL.replace('https://', '') });
+
+    mb.window.webContents.once("did-start-navigation", (_, url) => {
+      if (url.startsWith(CLOUD_URL)) {
+        sendToRenderer("loading-progress", { pct: 40, msg: "Server responded", detail: "Downloading UI..." });
+      }
+    });
+    mb.window.webContents.once("dom-ready", () => {
+      if (!uiLoaded) {
+        sendToRenderer("loading-progress", { pct: 80, msg: "Rendering UI...", detail: "DOM ready" });
+      }
+    });
+
     mb.window.loadURL(CLOUD_URL);
     // Timeout: 10s to load cloud, then fallback
     setTimeout(() => {
       if (!uiLoaded) {
         console.log("[ui] Cloud load timeout (10s), falling back to local");
-        sendToRenderer("loading-progress", { pct: 90, msg: "Timeout — loading offline UI", detail: "Cloud took too long" });
+        sendToRenderer("loading-progress", { pct: 90, msg: "Timeout \u2014 loading offline UI", detail: "Cloud took too long (10s)" });
         mb.window.loadURL(LOCAL_URL);
       }
     }, 10000);
@@ -615,7 +628,6 @@ mb.on("after-create-window", () => {
     if (status === "online") {
       loadCloudUI();
     } else {
-      // offline — go straight to local
       console.log("[ui] Network check failed, using local UI");
       mb.window.loadURL(LOCAL_URL);
     }
@@ -625,6 +637,7 @@ mb.on("after-create-window", () => {
     const url = mb.window.webContents.getURL();
     if (url.startsWith(CLOUD_URL) || (url.startsWith("file://") && !url.includes("loading.html"))) {
       uiLoaded = true;
+      sendToRenderer("loading-progress", { pct: 100, msg: "Ready", done: true });
       console.log("[ui] Loaded:", url);
     }
   });
@@ -632,7 +645,7 @@ mb.on("after-create-window", () => {
   mb.window.webContents.on("did-fail-load", (_, code, desc, url) => {
     if (url === CLOUD_URL || url.startsWith(CLOUD_URL)) {
       console.log(`[ui] Cloud load failed: ${desc} (${code})`);
-      sendToRenderer("loading-progress", { error: `${desc} (${code})` });
+      sendToRenderer("loading-progress", { error: `${desc} (code ${code})` });
       uiLoaded = true;
       mb.window.loadURL(LOCAL_URL);
     }

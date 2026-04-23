@@ -65,19 +65,31 @@ function set(pct, msg, det, err) {
   detail.textContent = det || '';
 }
 
-function showRetry() {
-  retryBtn.style.display = 'block';
+function showRetry() { retryBtn.style.display = 'block'; }
+function hideRetry() { retryBtn.style.display = 'none'; }
+
+// Listen for real progress from main process
+if (window.electronAPI) {
+  window.electronAPI.on('loading-progress', (data) => {
+    if (data.done) {
+      set(100, 'Ready', '');
+    } else if (data.error) {
+      set(80, 'Load failed', data.error, true);
+      showRetry();
+    } else if (data.pct != null) {
+      set(data.pct, data.msg || 'Loading...', data.detail || '', false);
+    }
+  });
 }
 
 retryBtn.addEventListener('click', () => {
-  retryBtn.style.display = 'none';
+  hideRetry();
   checkAndLoad();
 });
 
 async function checkAndLoad() {
-  set(10, 'Checking network...', '');
+  set(5, 'Checking network...', CLOUD.replace('https://', ''));
 
-  // Step 1: network check
   let reachable = false;
   for (let i = 0; i < 2; i++) {
     try {
@@ -86,47 +98,24 @@ async function checkAndLoad() {
       const r = await fetch(CLOUD, { method: 'HEAD', cache: 'no-cache', signal: ctrl.signal });
       clearTimeout(timer);
       if (r.ok) { reachable = true; break; }
-      set(20, i === 0 ? 'Retrying...' : 'Server error', `HTTP ${r.status}`, true);
+      set(15, i === 0 ? 'Retrying...' : 'Server error', `HTTP ${r.status}`, true);
     } catch (e) {
       const msg = e.name === 'AbortError' ? 'Timeout (5s)' : e.message;
-      set(20, i === 0 ? 'Retrying...' : 'Network unreachable', msg, true);
+      set(15, i === 0 ? 'Retrying...' : 'Network unreachable', msg, true);
     }
     if (i === 0) await new Promise(r => setTimeout(r, 2000));
   }
 
   if (!reachable) {
-    set(100, 'Loading offline UI', 'Cloud unreachable — using local fallback');
+    set(100, 'Using offline mode', 'Cloud unreachable — loading local UI', true);
     showRetry();
-    // Tell main process to use local
     if (window.electronAPI) window.electronAPI.invoke('loading-status', 'offline');
     return;
   }
 
-  // Step 2: cloud reachable, main process will load it
-  set(50, 'Loading UI...', CLOUD.replace('https://', ''));
+  set(20, 'Network OK', 'Requesting UI from server...');
   if (window.electronAPI) window.electronAPI.invoke('loading-status', 'online');
-
-  // Step 3: wait for main process to signal completion or failure
-  if (window.electronAPI) {
-    window.electronAPI.on('loading-progress', (data) => {
-      if (data.done) {
-        set(100, 'Ready', '');
-      } else if (data.error) {
-        set(80, 'Load failed', data.error, true);
-        showRetry();
-      } else if (data.pct) {
-        set(data.pct, data.msg || 'Loading...', data.detail || '');
-      }
-    });
-  }
-
-  // Fallback timeout — if no signal from main in 12s
-  setTimeout(() => {
-    const w = bar.style.width;
-    if (w && parseInt(w) < 100) {
-      set(90, 'Taking longer than expected...', 'Will fallback to local UI soon');
-    }
-  }, 12000);
+  // From here, main process drives progress via loading-progress events
 }
 
 checkAndLoad();
