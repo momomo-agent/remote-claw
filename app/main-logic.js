@@ -594,12 +594,25 @@ mb.on("ready", () => {
 
 mb.on("after-create-window", () => {
   // Load cloud UI after showing loading screen
+  let cloudLoaded = false;
   mb.window.webContents.once("did-finish-load", () => {
     mb.window.loadURL(CLOUD_URL);
+    // Timeout fallback — if cloud doesn't load in 8s, use local
+    setTimeout(() => {
+      if (!cloudLoaded) {
+        console.log("[ui] Cloud load timeout, falling back to local");
+        mb.window.loadURL(LOCAL_URL);
+      }
+    }, 8000);
+  });
+  mb.window.webContents.on("did-finish-load", () => {
+    const currentUrl = mb.window.webContents.getURL();
+    if (currentUrl.startsWith(CLOUD_URL) || currentUrl.startsWith("file://")) cloudLoaded = true;
   });
   mb.window.webContents.on("did-fail-load", (_, code, desc, url) => {
     if (url === CLOUD_URL) {
       console.log(`[ui] Cloud load failed (${desc}), falling back to local`);
+      cloudLoaded = true; // prevent timeout from firing too
       mb.window.loadURL(LOCAL_URL);
     }
   });
