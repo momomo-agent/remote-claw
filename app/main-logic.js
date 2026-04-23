@@ -507,14 +507,6 @@ setTimeout(checkForUpdate, 5000);
 setInterval(updateDaemon, 30 * 60 * 1000);
 setTimeout(updateDaemon, 60000); // First check after 1 min
 
-// IPC: Daemon management
-ipcMain.handle("daemon-status", () => ({ running: isDaemonRunning(), installed: fs.existsSync(DAEMON_ENTRY) }));
-ipcMain.handle("daemon-restart", () => {
-  try { const pid = parseInt(fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim()); process.kill(pid, "SIGTERM"); } catch {}
-  setTimeout(startDaemon, 1000);
-  return { ok: true };
-});
-
 // ── Menubar ──
 
 const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
