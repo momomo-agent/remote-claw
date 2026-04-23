@@ -117,10 +117,12 @@ body {
 .tabbar-item {
   padding: 5px 14px; border-radius: var(--radius-xs);
   font-size: 12px; font-weight: 500; color: var(--text-tertiary);
-  cursor: pointer; transition: all 0.2s ease;
-  letter-spacing: -0.01em;
+  cursor: grab; transition: all 0.2s ease;
+  letter-spacing: -0.01em; user-select: none;
 }
+.tabbar-item:active { cursor: grabbing; }
 .tabbar-item:hover { color: var(--text-secondary); }
+.tabbar-item.drag-over { border-left: 2px solid var(--blue); padding-left: 12px; }
 .tabbar-item.active {
   color: var(--text-primary); background: var(--bg-surface);
   box-shadow: var(--shadow-sm);
