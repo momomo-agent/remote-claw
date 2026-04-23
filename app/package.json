@@ -24,6 +24,7 @@
     "productName": "RemoteClaw",
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "icon.icns",
       "target": "dmg"
     }
   }

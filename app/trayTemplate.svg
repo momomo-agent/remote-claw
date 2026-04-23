@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22">
+  <!-- Tray icon: simplified claw + dot, monochrome for macOS Template -->
+  <g transform="translate(11, 9)" stroke="#000" fill="none" stroke-linecap="round" stroke-width="2">
+    <path d="M-5,-7 C-4.5,-3 -3,0 -1.5,3"/>
+    <path d="M0,-8 C0,-3.5 0,0 0,3.5"/>
+    <path d="M5,-7 C4.5,-3 3,0 1.5,3"/>
+  </g>
+  <circle cx="11" cy="15" r="1.5" fill="#000"/>
+</svg>

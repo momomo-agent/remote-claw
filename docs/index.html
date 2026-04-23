@@ -375,12 +375,33 @@ body {
   transition: background 0.1s;
 }
 .ctx-item:hover { background: var(--bg-hover); }
+
+/* ── Network ── */
+.network-section { padding: 0; }
+.net-stat-row { gap: 12px; cursor: default; }
+.net-stat-row:active { transform: none; }
+.net-stat-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); min-width: 80px; }
+.net-stat-value { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--text-primary); text-align: right; word-break: break-all; }
+.net-group-header { gap: 8px; }
+.net-group-name { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.net-group-meta { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; }
+.net-node { gap: 8px; padding: 8px 16px; cursor: pointer; }
+.net-node:hover { background: var(--bg-hover); }
+.net-node-active { background: var(--accent-dim); }
+.net-latency {
+  font-size: 10px; font-weight: 600; padding: 1px 7px;
+  border-radius: 10px; letter-spacing: 0.02em;
+}
+.net-latency-good { background: var(--green-dim); color: var(--green); }
+.net-latency-mid { background: rgba(255,149,0,0.12); color: var(--orange); }
+.net-latency-bad { background: var(--red-dim); color: var(--red); }
+.net-latency-none { background: var(--bg-surface); color: var(--text-tertiary); }
 </style>
 </head>
 <body>
 <div id="app"></div>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
-<script src="app.js"></script>
+<script type="module" src="js/app.js"></script>
 </body>
 </html>

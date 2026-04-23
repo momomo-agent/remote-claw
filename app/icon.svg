@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="rc-icon">
+  <title id="rc-icon">RemoteClaw App Icon</title>
+  <defs>
+    <linearGradient id="bg-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f1729"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="claw-grad" x1="0.3" y1="0" x2="0.7" y2="1">
+      <stop offset="0%" stop-color="#93c5fd"/>
+      <stop offset="50%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="glow-grad" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="224" fill="url(#bg-grad)"/>
+
+  <!-- Claw — three tapered strokes, aggressive curve -->
+  <g transform="translate(512, 460)" stroke="url(#claw-grad)" fill="none" stroke-linecap="round">
+    <!-- Left claw -->
+    <path d="M-200,-220 C-190,-100 -130,20 -50,110" stroke-width="52"/>
+    <!-- Center claw -->
+    <path d="M0,-260 C0,-120 0,0 0,130" stroke-width="56"/>
+    <!-- Right claw -->
+    <path d="M200,-220 C190,-100 130,20 50,110" stroke-width="52"/>
+  </g>
+
+  <!-- Connection node -->
+  <circle cx="512" cy="610" r="32" fill="url(#glow-grad)" filter="url(#glow)"/>
+
+  <!-- Signal waves -->
+  <g transform="translate(512, 610)" stroke="url(#glow-grad)" stroke-width="10" stroke-linecap="round" fill="none">
+    <path d="M-55,45 A65,65 0 0,0 55,45" opacity="0.6"/>
+    <path d="M-95,75 A110,110 0 0,0 95,75" opacity="0.35"/>
+  </g>
+</svg>

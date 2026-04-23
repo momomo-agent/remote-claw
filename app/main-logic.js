@@ -65,23 +65,32 @@ const httpBase = config.server.replace("wss://", "https://").replace("ws://", "h
 // ── Tray icon ──
 
 function createTrayIcon(connected) {
-  const size = 22;
-  const canvas = Buffer.alloc(size * size * 4, 0);
-  const cx = 11, cy = 11, r = 7;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
-      if (dist <= r) {
-        const idx = (y * size + x) * 4;
-        if (connected) {
-          canvas[idx] = 0; canvas[idx + 1] = 200; canvas[idx + 2] = 80; canvas[idx + 3] = 255;
-        } else {
-          canvas[idx] = 180; canvas[idx + 1] = 50; canvas[idx + 2] = 50; canvas[idx + 3] = 255;
+  // Use Template image for native macOS menubar look
+  const trayPath = path.join(APP_DIR, 'trayTemplate.png');
+  try {
+    const img = nativeImage.createFromPath(trayPath);
+    img.setTemplateImage(true);
+    return img;
+  } catch {
+    // Fallback: programmatic colored dot
+    const size = 22;
+    const canvas = Buffer.alloc(size * size * 4, 0);
+    const cx = 11, cy = 11, r = 7;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+        if (dist <= r) {
+          const idx = (y * size + x) * 4;
+          if (connected) {
+            canvas[idx] = 0; canvas[idx + 1] = 200; canvas[idx + 2] = 80; canvas[idx + 3] = 255;
+          } else {
+            canvas[idx] = 180; canvas[idx + 1] = 50; canvas[idx + 2] = 50; canvas[idx + 3] = 255;
+          }
         }
       }
     }
+    return nativeImage.createFromBuffer(canvas, { width: size, height: size });
   }
-  return nativeImage.createFromBuffer(canvas, { width: size, height: size });
 }
 
 // ── State ──
