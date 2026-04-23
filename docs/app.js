@@ -70,7 +70,7 @@ function render() {
   if (isDetached) {
     app.innerHTML = `
       <div class="detached-titlebar">
-        <select class="device-select" id="global-device" style="margin-left:72px;font-size:13px;font-weight:500;color:var(--text)">
+        <select class="device-select" id="global-device" style="margin-left:72px">
           <option value="">No device</option>
           ${state.devices.map(d => `<option value="${esc(d.id)}" ${d.id === state.selectedDevice ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}
         </select>
