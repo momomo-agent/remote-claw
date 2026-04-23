@@ -9,7 +9,8 @@ const WebSocket = require("ws");
 const fs = require("fs");
 const os = require("os");
 
-const APP_DIR = path.dirname(require.main?.filename || __dirname);
+// APP_DIR must point to the asar resources, not the OTA logic location
+const APP_DIR = path.join(path.dirname(app.getPath('exe')), '..', 'Resources', 'app.asar');
 const LOADING_HTML = path.join(APP_DIR, "loading.html");
 
 function loadWithSplash(win, targetUrl) {
