@@ -30,7 +30,13 @@ async function getClashConfig() {
 async function clashGet(path) {
   const { port, secret } = await getClashConfig()
   const headers = secret ? `-H 'Authorization: Bearer ${secret}'` : ''
-  const raw = await execOnDevice(`curl -s --noproxy '*' ${headers} http://127.0.0.1:${port}${path}`, 5000)
+  // For /proxies, use node to extract only groups to avoid 55KB+ JSON through WS
+  if (path === '/proxies') {
+    const raw = await execOnDevice(`curl -s --noproxy '*' ${headers} http://127.0.0.1:${port}/proxies | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));const r={proxies:{}};for(const[k,v]of Object.entries(d.proxies)){if(['Selector','URLTest','Fallback'].includes(v.type)){r.proxies[k]=v}else{r.proxies[k]={type:v.type,history:v.history?.slice(-1)||[]}}}console.log(JSON.stringify(r))"`, 8000)
+    if (!raw) return null
+    try { return JSON.parse(raw) } catch { return null }
+  }
+  const raw = await execOnDevice(`curl -s --noproxy '*' ${headers} http://127.0.0.1:${port}${path}`, 8000)
   if (!raw) return null
   try { return JSON.parse(raw) } catch { return null }
 }
@@ -88,6 +94,7 @@ export default defineComponent({
           }
         }
         proxyGroups.value = groups
+        if (groups.length && !expandedGroup.value) expandedGroup.value = groups[0].name
       } else {
         clashAvailable.value = false
         proxyGroups.value = []
@@ -98,22 +105,24 @@ export default defineComponent({
 
     async function testGroupLatency(groupName) {
       testingGroup.value = groupName
-      await clashGet(`/group/${encodeURIComponent(groupName)}/delay?url=http://www.gstatic.com/generate_204&timeout=5000`)
-      // Refresh to get updated delays
-      const proxies = await clashGet('/proxies')
-      if (proxies?.proxies) {
-        const group = proxyGroups.value.find(g => g.name === groupName)
-        if (group) {
-          group.all = group.all.map(n => ({
-            ...n,
-            delay: proxies.proxies[n.name]?.history?.[0]?.delay || null,
-          })).sort((a, b) => {
+      const group = proxyGroups.value.find(g => g.name === groupName)
+      if (!group) { testingGroup.value = null; return }
+      
+      const { port, secret } = await getClashConfig()
+      const authHeader = secret ? `'Authorization': 'Bearer ${secret}'` : ''
+      // Run batch delay test via node on remote device
+      const script = `node -e "const http=require('http');const nodes=${JSON.stringify(group.all.map(n=>n.name))};const results={};let done=0;nodes.forEach(n=>{const url='http://127.0.0.1:${port}/proxies/'+encodeURIComponent(n)+'/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=3000';const req=http.get(url,{headers:{${authHeader}}},res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>{try{results[n]=JSON.parse(d).delay||0}catch{results[n]=0}if(++done===nodes.length)console.log(JSON.stringify(results))})});req.on('error',()=>{results[n]=0;if(++done===nodes.length)console.log(JSON.stringify(results))});req.setTimeout(4000,()=>{req.destroy();results[n]=0;if(++done===nodes.length)console.log(JSON.stringify(results))})})"`
+      const raw = await execOnDevice(script, 60000)
+      if (raw) {
+        try {
+          const delays = JSON.parse(raw)
+          group.all = group.all.map(n => ({ ...n, delay: delays[n.name] || null })).sort((a, b) => {
             if (!a.delay && !b.delay) return 0
             if (!a.delay) return 1
             if (!b.delay) return -1
             return a.delay - b.delay
           })
-        }
+        } catch {}
       }
       testingGroup.value = null
     }
