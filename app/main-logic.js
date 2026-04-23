@@ -475,12 +475,9 @@ mb = menubar({
 });
 
 mb.on("ready", () => {
-  // Navigate to cloud UI after splash
+  // Navigate to cloud UI
   if (mb.window) {
-    mb.window.webContents.on('did-finish-load', function onSplash() {
-      mb.window.webContents.removeListener('did-finish-load', onSplash);
-      mb.window.loadURL(CLOUD_URL);
-    });
+    mb.window.loadURL(CLOUD_URL);
   }
   connectDaemon();
 
