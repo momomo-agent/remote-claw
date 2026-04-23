@@ -301,6 +301,9 @@ function connectClient() {
         if (msg.type === "shell-data" || msg.type === "shell-exit") {
           sendToRenderer(msg.type, msg);
         }
+        if (msg.type === "screen-frame") {
+          sendToRenderer("screen-frame", msg);
+        }
       } catch {}
     });
     ws.on("close", () => {
@@ -380,6 +383,8 @@ ipcMain.handle("shell-open", (_, p) => wsSend({ type: "shell-open", sessionId: p
 ipcMain.handle("shell-input", (_, p) => wsSend({ type: "shell-input", sessionId: p.sessionId, data: p.data, to: p.device }));
 ipcMain.handle("shell-resize", (_, p) => wsSend({ type: "shell-resize", sessionId: p.sessionId, cols: p.cols, rows: p.rows, to: p.device }));
 ipcMain.handle("shell-close", (_, p) => wsSend({ type: "shell-close", sessionId: p.sessionId, to: p.device }));
+ipcMain.handle("screen-start", (_, p) => wsSend({ type: "screen-start", sessionId: p.sessionId, to: p.device, quality: p.quality || 60, fps: p.fps || 2 }));
+ipcMain.handle("screen-stop", (_, p) => wsSend({ type: "screen-stop", sessionId: p.sessionId, to: p.device }));
 
 // ── IPC: Window ──
 
@@ -698,6 +703,7 @@ const UI_FILES = [
   "js/apps/HistoryApp.js",
   "js/apps/AppsGrid.js",
   "js/apps/SettingsApp.js",
+  "js/apps/ScreenApp.js",
 ];
 
 async function cacheCloudUI() {

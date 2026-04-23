@@ -15,6 +15,7 @@ import HistoryApp from './apps/HistoryApp.js'
 import SettingsApp from './apps/SettingsApp.js'
 import NetworkApp from './apps/NetworkApp.js'
 import ClawApp from './apps/ClawApp.js'
+import ScreenApp from './apps/ScreenApp.js'
 
 const App = defineComponent({
   name: 'App',
@@ -157,6 +158,7 @@ const App = defineComponent({
         settings: SettingsApp,
         network: NetworkApp,
         claw: ClawApp,
+        screen: ScreenApp,
       }
       const Comp = appMap[state.currentApp] || ShellApp
       if (Comp === AppsGrid) {

@@ -14,12 +14,14 @@ export const ALL_APPS = [
   { id: 'browser',  label: 'Browser',  icon: '🌐', canDetach: 'only', needsDevice: true },
   { id: 'network',  label: 'Network',  icon: '📡', canDetach: true,  needsDevice: true },
   { id: 'claw',     label: 'Claw',     icon: '🦞', canDetach: true,  needsDevice: true },
+  { id: 'screen',   label: 'Screen',   icon: '🖥', canDetach: true,  needsDevice: true },
   { id: 'devices',  label: 'Devices',  icon: '📡', canDetach: false, needsDevice: false },
   { id: 'history',  label: 'History',  icon: '📋', canDetach: false, needsDevice: false },
+  { id: 'apps',     label: 'Apps',     icon: '⊞',  canDetach: false, needsDevice: false },
   { id: 'settings', label: 'Settings', icon: '⚙',  canDetach: false, needsDevice: false },
 ]
 
-const DEFAULT_PINNED = ['devices', 'shell', 'files', 'settings']
+const DEFAULT_PINNED = ['devices', 'shell', 'files', 'apps']
 
 function loadPinned() {
   try { return JSON.parse(localStorage.getItem('rc-pinned-tabs')) || DEFAULT_PINNED }
