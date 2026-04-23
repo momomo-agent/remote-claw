@@ -62,16 +62,24 @@ export default defineComponent({
       // Body
       let body
       if (files.loading.value) {
-        body = h('div', { class: 'loading' }, 'Loading...')
+        body = h('div', { class: 'empty' }, [
+          h('div', { class: 'spinner' }),
+          h('div', { class: 'empty-text' }, 'Loading files...'),
+        ])
       } else if (files.error.value) {
         body = h('div', { class: 'empty' }, [
           h('div', { class: 'empty-icon' }, '\u26a0\ufe0f'),
           h('div', { class: 'empty-text' }, files.error.value),
+          h('button', {
+            class: 'files-btn', style: { marginTop: '8px', padding: '6px 16px' },
+            onClick: () => files.loadFiles(files.path.value),
+          }, 'Retry'),
         ])
       } else if (!files.entries.value.length) {
         body = h('div', { class: 'empty' }, [
           h('div', { class: 'empty-icon' }, '\ud83d\udcc2'),
           h('div', { class: 'empty-text' }, 'Empty directory'),
+          h('div', { class: 'empty-hint' }, files.path.value),
         ])
       } else {
         body = h('div', { class: 'card' },

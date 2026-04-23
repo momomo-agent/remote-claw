@@ -679,12 +679,14 @@ const UI_CACHE_DIR = path.join(CONFIG_DIR, "ui-cache");
 const UI_FILES = [
   "index.html",
   "preview.html",
+  "editor.html",
   "js/app.js",
   "js/state.js",
   "js/api.js",
   "js/components/TabBar.js",
   "js/components/DeviceSelect.js",
   "js/components/ContextMenu.js",
+  "js/components/AppCard.js",
   "js/composables/useContextMenu.js",
   "js/composables/useShell.js",
   "js/composables/useFiles.js",
@@ -694,7 +696,7 @@ const UI_FILES = [
   "js/apps/ClawApp.js",
   "js/apps/DevicesApp.js",
   "js/apps/HistoryApp.js",
-  "js/apps/AppsApp.js",
+  "js/apps/AppsGrid.js",
   "js/apps/SettingsApp.js",
 ];
 

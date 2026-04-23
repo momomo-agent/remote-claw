@@ -9,6 +9,7 @@ export default defineComponent({
         return h('div', { class: 'empty' }, [
           h('div', { class: 'empty-icon' }, '\ud83d\udce1'),
           h('div', { class: 'empty-text' }, 'No devices online'),
+          h('div', { class: 'empty-hint' }, 'Make sure the daemon is running on your remote machine'),
         ])
       }
       return h('div', { class: 'card' },

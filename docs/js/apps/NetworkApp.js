@@ -132,7 +132,10 @@ export default defineComponent({
       }
 
       if (loading.value && !publicIp.value) {
-        return h('div', { class: 'loading' }, 'Loading network info...')
+        return h('div', { class: 'empty' }, [
+          h('div', { class: 'spinner' }),
+          h('div', { class: 'empty-text' }, 'Scanning network...'),
+        ])
       }
 
       const sections = []

@@ -1,5 +1,5 @@
 import { createApp, defineComponent, h, onMounted, onUnmounted, watch } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
-import { state, ALL_APPS, isDetached, detachedTab, savePinnedTabs } from './state.js'
+import { state, ALL_APPS, isDetached, detachedTab, savePinnedTabs, showToast } from './state.js'
 import { api, refreshData, ensureConfig } from './api.js'
 import { useContextMenu } from './composables/useContextMenu.js'
 import TabBar from './components/TabBar.js'
@@ -38,8 +38,7 @@ const App = defineComponent({
             if (val) {
               const result = await api.invoke('open-code-server', { device: state.selectedDevice, port: parseInt(val) })
               if (result?.error) {
-                // Show error in a simple way
-                alert('VS Code: ' + result.error)
+                showToast('VS Code: ' + result.error, 'error')
               }
             }
           },
@@ -56,10 +55,6 @@ const App = defineComponent({
             if (val) api.invoke('open-browser', { device: state.selectedDevice, port: parseInt(val), path: '/' })
           },
         }
-        return
-      }
-      if (appId === 'screen') {
-        api.invoke('notify', { title: 'Screen', body: 'Screen sharing coming soon' })
         return
       }
 
@@ -292,6 +287,12 @@ const App = defineComponent({
             ]),
           ]),
         ]) : null,
+        // Toasts
+        state.toasts.length ? h('div', { class: 'toast-container' },
+          state.toasts.map(t =>
+            h('div', { class: `toast toast-${t.type}`, key: t.id }, t.msg)
+          )
+        ) : null,
       ])
     }
   },

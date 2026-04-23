@@ -1,5 +1,5 @@
 import { defineComponent, h, ref, reactive, onMounted } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
-import { state } from '../state.js'
+import { state, showToast } from '../state.js'
 import { apiFetch } from '../api.js'
 
 async function execOnDevice(command, timeout = 10000) {
@@ -295,9 +295,8 @@ console.log('ok');
                 },
                 onClick: () => {
                   const fullId = `${prov.name}/${m.id}`
-                  if (confirm(`Set default model to ${fullId}?`)) {
-                    setDefaultModel(fullId)
-                  }
+                  setDefaultModel(fullId)
+                  showToast(`Default model set to ${fullId}`, 'success')
                 },
                 title: `Click to set as default\n${m.contextWindow ? 'Context: ' + (m.contextWindow / 1024) + 'K' : ''}${m.maxTokens ? ' · Max: ' + m.maxTokens : ''}`,
               }, [
@@ -359,7 +358,10 @@ console.log('ok');
       }
 
       if (loading.value && !statusRaw.value) {
-        return h('div', { class: 'loading' }, 'Loading...')
+        return h('div', { class: 'empty' }, [
+          h('div', { class: 'spinner' }),
+          h('div', { class: 'empty-text' }, 'Loading OpenClaw status...'),
+        ])
       }
 
       const tabContent = {

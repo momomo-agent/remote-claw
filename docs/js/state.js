@@ -12,16 +12,14 @@ export const ALL_APPS = [
   { id: 'files',    label: 'Files',    icon: '📁', canDetach: true,  needsDevice: true },
   { id: 'vscode',   label: 'VS Code',  icon: '💻', canDetach: 'only', needsDevice: true },
   { id: 'browser',  label: 'Browser',  icon: '🌐', canDetach: 'only', needsDevice: true },
-  { id: 'screen',   label: 'Screen',   icon: '🖥', canDetach: 'only', needsDevice: true },
   { id: 'network',  label: 'Network',  icon: '📡', canDetach: true,  needsDevice: true },
   { id: 'claw',     label: 'Claw',     icon: '🦞', canDetach: true,  needsDevice: true },
   { id: 'devices',  label: 'Devices',  icon: '📡', canDetach: false, needsDevice: false },
   { id: 'history',  label: 'History',  icon: '📋', canDetach: false, needsDevice: false },
-  { id: 'apps',     label: 'Apps',     icon: '⊞',  canDetach: false, needsDevice: false },
   { id: 'settings', label: 'Settings', icon: '⚙',  canDetach: false, needsDevice: false },
 ]
 
-const DEFAULT_PINNED = ['devices', 'shell', 'files', 'apps']
+const DEFAULT_PINNED = ['devices', 'shell', 'files', 'settings']
 
 function loadPinned() {
   try { return JSON.parse(localStorage.getItem('rc-pinned-tabs')) || DEFAULT_PINNED }
@@ -33,7 +31,7 @@ export const state = reactive({
   connected: false,
   serverUrl: '',
   devices: [],
-  history: [],
+  history: JSON.parse(localStorage.getItem('rc-history') || '[]'),
   selectedDevice: detachedDevice || '',
   configRaw: null,
   pinned: false,
@@ -42,7 +40,17 @@ export const state = reactive({
   daemonInstalled: false,
   updateAvailable: null, // { current, next, needsDmg }
   promptModal: null, // { title, placeholder, defaultValue, onSubmit }
+  toasts: [],
 })
+
+let _toastId = 0
+export function showToast(msg, type = 'info') {
+  const id = ++_toastId
+  state.toasts.push({ id, msg, type })
+  setTimeout(() => {
+    state.toasts = state.toasts.filter(t => t.id !== id)
+  }, 3000)
+}
 
 export function savePinnedTabs() {
   localStorage.setItem('rc-pinned-tabs', JSON.stringify(state.pinnedTabs))

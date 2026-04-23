@@ -32,7 +32,20 @@ export function useFiles() {
           fallback: { error: 'failed' },
         })
         const home = result.stdout?.trim()
-        if (home) resolvedPath = dirPath === '~' ? home : home + dirPath.slice(1)
+        if (home) {
+          resolvedPath = dirPath === '~' ? home : home + dirPath.slice(1)
+        } else {
+          // Fallback: try common home directories
+          const fallbackResult = await apiFetch('/exec', {
+            method: 'POST',
+            body: JSON.stringify({ device: state.selectedDevice, command: 'ls /Users 2>/dev/null && echo USERS || (ls /home 2>/dev/null && echo HOME)', oneshot: true, timeout: 5000 }),
+            fallback: { error: 'failed' },
+          })
+          const out = fallbackResult.stdout?.trim() || ''
+          if (out.includes('USERS')) resolvedPath = '/Users'
+          else if (out.includes('HOME')) resolvedPath = '/home'
+          else resolvedPath = '/'
+        }
       }
 
       const result = await apiFetch('/exec', {
