@@ -433,7 +433,25 @@ body {
 </style>
 </head>
 <body>
-<div id="app"></div>
+<div id="app">
+  <div id="app-loading" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;color:#8e8e93;font-family:-apple-system,BlinkMacSystemFont,'Geist',sans-serif;">
+    <div style="width:24px;height:24px;border:2px solid #333;border-top-color:#3b82f6;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+    <div style="font-size:13px;">Loading RemoteClaw...</div>
+    <div id="loading-fallback" style="display:none;text-align:center;margin-top:24px;">
+      <div style="font-size:12px;color:#ff9500;margin-bottom:12px;">Taking longer than expected</div>
+      <div style="font-size:11px;color:#56565a;max-width:260px;line-height:1.5;">If this persists, check your network connection. The UI loads from GitHub Pages.</div>
+    </div>
+  </div>
+</div>
+<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+<script>
+  // Show fallback message after 8 seconds
+  setTimeout(function(){
+    var fb = document.getElementById('loading-fallback');
+    var ld = document.getElementById('app-loading');
+    if (fb && ld && ld.parentNode) fb.style.display = 'block';
+  }, 8000);
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script type="module" src="js/app.js"></script>

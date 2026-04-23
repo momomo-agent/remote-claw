@@ -518,11 +518,12 @@ ipcMain.handle("daemon-restart", () => {
 
 const CLOUD_URL = "https://momomo-agent.github.io/remote-claw/";
 const LOCAL_URL = `file://${path.join(APP_DIR, "renderer", "index.html")}`;
+const LOADING_URL = `file://${LOADING_HTML}`;
 
 app.dock?.hide();
 
 mb = menubar({
-  index: CLOUD_URL,
+  index: LOADING_URL,
   icon: createTrayIcon(false),
   preloadWindow: true,
   showDockIcon: false,
@@ -599,7 +600,16 @@ mb.on("ready", () => {
 });
 
 mb.on("after-create-window", () => {
-  mb.window.webContents.on("did-fail-load", (_, __, desc, url) => { if (url === CLOUD_URL) mb.window.loadURL(LOCAL_URL); });
+  // Load cloud UI after showing loading screen
+  mb.window.webContents.once("did-finish-load", () => {
+    mb.window.loadURL(CLOUD_URL);
+  });
+  mb.window.webContents.on("did-fail-load", (_, code, desc, url) => {
+    if (url === CLOUD_URL) {
+      console.log(`[ui] Cloud load failed (${desc}), falling back to local`);
+      mb.window.loadURL(LOCAL_URL);
+    }
+  });
   mb.window.on("move", () => sendToRenderer("window-moved", { bounds: mb.window.getBounds(), trayBounds }));
   mb.window.removeAllListeners("blur");
   mb.window.on("blur", () => { if (!isPinned) mb.hideWindow(); });
