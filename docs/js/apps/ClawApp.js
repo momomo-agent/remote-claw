@@ -1,6 +1,6 @@
 import { defineComponent, h, ref, reactive, onMounted } from 'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js'
 import { state, showToast } from '../state.js'
-import { apiFetch } from '../api.js'
+import { apiFetch, api } from '../api.js'
 
 async function execOnDevice(command, timeout = 10000) {
   if (!state.selectedDevice) return null
@@ -75,6 +75,10 @@ export default defineComponent({
           }
           providers.value = provs
           defaultModel.value = parsed.default_model || parsed.defaultModel || ''
+          // If no explicit default, infer from first provider's first model
+          if (!defaultModel.value && provs.length && provs[0].models.length) {
+            currentModel.value = `${provs[0].name}/${provs[0].models[0].id}`
+          }
 
           // Mask tokens for display
           const display = JSON.parse(c)
@@ -228,20 +232,26 @@ console.log('ok');
       }
 
       return h('div', {}, [
-        // Current / Default model
+        // Current / Default model + Fallback order
         h('div', { class: 'card', style: { padding: '12px 14px', marginBottom: '8px' } }, [
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, [
             h('div', {}, [
               h('div', { style: { fontSize: '11px', color: 'var(--text-tertiary)', marginBottom: '4px' } }, 'Active Model'),
               h('div', { style: { fontSize: '13px', fontWeight: '600', fontFamily: 'var(--mono)' } }, currentModel.value || 'unknown'),
             ]),
-            defaultModel.value
-              ? h('div', { style: { textAlign: 'right' } }, [
-                  h('div', { style: { fontSize: '11px', color: 'var(--text-tertiary)', marginBottom: '4px' } }, 'Default'),
-                  h('div', { style: { fontSize: '12px', fontFamily: 'var(--mono)', color: 'var(--text-secondary)' } }, defaultModel.value),
-                ])
-              : null,
+            h('button', {
+              class: 'files-btn',
+              style: { fontSize: '10px', padding: '4px 10px' },
+              onClick: () => api.invoke('open-code-server', { device: state.selectedDevice, folder: '~/.openclaw' }),
+            }, '✎ Edit Config'),
           ]),
+          // Fallback order
+          providers.value.length ? h('div', { style: { marginTop: '10px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.06)' } }, [
+            h('div', { style: { fontSize: '10px', color: 'var(--text-tertiary)', marginBottom: '4px' } }, 'Fallback Order'),
+            h('div', { style: { fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text-secondary)' } },
+              providers.value.map(p => p.name).join(' → ')
+            ),
+          ]) : null,
         ]),
 
         // Providers
