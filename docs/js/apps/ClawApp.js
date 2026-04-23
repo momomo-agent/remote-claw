@@ -1,4 +1,4 @@
-import { defineComponent, h, ref, onMounted } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
+import { defineComponent, h, ref, reactive, onMounted } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js'
 import { state } from '../state.js'
 import { apiFetch } from '../api.js'
 
@@ -19,9 +19,17 @@ export default defineComponent({
     const loading = ref(false)
     const statusRaw = ref('')
     const gatewayRaw = ref('')
-    const configJson = ref(null)
+    const rawConfig = ref(null)       // full parsed config (tokens masked for display)
+    const providers = ref([])          // [{name, baseUrl, api, models: [{id, name, reasoning, contextWindow}]}]
+    const currentModel = ref('')       // active model from openclaw status
+    const defaultModel = ref('')       // from config
     const logs = ref('')
     const restarting = ref(false)
+    const activeTab = ref('status')    // status | models | config | logs
+    const testingProvider = ref(null)
+    const testResults = reactive({})   // {providerName: {model, latency, ok, error}}
+    const editingDefault = ref(false)
+    const newDefault = ref('')
 
     async function refresh() {
       if (!state.selectedDevice) return
@@ -38,18 +46,45 @@ export default defineComponent({
       gatewayRaw.value = g || 'Unknown'
       logs.value = l || ''
 
+      // Parse status for current model
+      const modelMatch = s?.match(/model[:\s]+(\S+)/i)
+      if (modelMatch) currentModel.value = modelMatch[1]
+
       if (c) {
         try {
           const parsed = JSON.parse(c)
-          // Mask tokens
-          if (parsed.providers) {
-            for (const p of parsed.providers) {
+
+          // Extract providers
+          const provs = []
+          if (parsed.models?.providers) {
+            for (const [name, p] of Object.entries(parsed.models.providers)) {
+              provs.push({
+                name,
+                baseUrl: p.baseUrl || '',
+                api: p.api || 'unknown',
+                models: (p.models || []).map(m => ({
+                  id: m.id,
+                  name: m.name || m.id,
+                  reasoning: m.reasoning || false,
+                  contextWindow: m.contextWindow,
+                  maxTokens: m.maxTokens,
+                })),
+              })
+            }
+          }
+          providers.value = provs
+          defaultModel.value = parsed.default_model || parsed.defaultModel || ''
+
+          // Mask tokens for display
+          const display = JSON.parse(c)
+          if (display.models?.providers) {
+            for (const p of Object.values(display.models.providers)) {
               if (p.apiKey) p.apiKey = p.apiKey.slice(0, 8) + '***'
             }
           }
-          if (parsed.token) parsed.token = parsed.token.slice(0, 8) + '***'
-          configJson.value = parsed
-        } catch { configJson.value = null }
+          if (display.token) display.token = display.token.slice(0, 8) + '***'
+          rawConfig.value = display
+        } catch { rawConfig.value = null }
       }
 
       loading.value = false
@@ -58,10 +93,47 @@ export default defineComponent({
     async function gatewayAction(action) {
       restarting.value = true
       await execOnDevice(`openclaw gateway ${action} 2>&1`, 15000)
-      // Wait a moment for gateway to settle
       await new Promise(r => setTimeout(r, 2000))
       await refresh()
       restarting.value = false
+    }
+
+    async function testProvider(provName) {
+      testingProvider.value = provName
+      const start = Date.now()
+      const result = await execOnDevice(
+        `curl -s -o /dev/null -w '%{http_code}' --max-time 10 $(cat ~/.openclaw/openclaw.json | node -e "const c=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); const p=c.models?.providers?.['${provName}']; console.log((p?.baseUrl||''))" 2>/dev/null)/v1/models 2>/dev/null`,
+        12000
+      )
+      const latency = Date.now() - start
+      testResults[provName] = {
+        ok: result === '200' || result === '401' || result === '403',
+        latency,
+        status: result || 'timeout',
+      }
+      testingProvider.value = null
+    }
+
+    async function setDefaultModel(modelId) {
+      // Use openclaw CLI or direct config edit
+      const cmd = `cd ~ && node -e "
+const fs=require('fs');
+const p='$HOME/.openclaw/openclaw.json';
+const c=JSON.parse(fs.readFileSync(p.replace('$HOME',require('os').homedir()),'utf8'));
+c.default_model='${modelId}';
+fs.writeFileSync(p.replace('$HOME',require('os').homedir()),JSON.stringify(c,null,2));
+console.log('ok');
+"`
+      const result = await execOnDevice(cmd, 5000)
+      if (result?.includes('ok')) {
+        defaultModel.value = modelId
+        editingDefault.value = false
+      }
+    }
+
+    async function toggleProvider(provName, enable) {
+      // Add/remove provider by renaming key with _ prefix (disabled convention)
+      // For now, just show the info — full enable/disable needs more thought
     }
 
     onMounted(() => { refresh() })
@@ -76,6 +148,207 @@ export default defineComponent({
       return info
     }
 
+    // ── Render helpers ──
+
+    function renderTabs() {
+      const tabs = [
+        { id: 'status', label: 'Status' },
+        { id: 'models', label: 'Models' },
+        { id: 'config', label: 'Config' },
+        { id: 'logs', label: 'Logs' },
+      ]
+      return h('div', { class: 'claw-tabs' }, tabs.map(t =>
+        h('div', {
+          class: ['claw-tab', { active: activeTab.value === t.id }],
+          onClick: () => { activeTab.value = t.id },
+        }, t.label)
+      ))
+    }
+
+    function renderStatus() {
+      const info = parseStatus(statusRaw.value)
+      const gwInfo = parseStatus(gatewayRaw.value)
+      const isRunning = gatewayRaw.value.toLowerCase().includes('running') || gwInfo['status']?.toLowerCase().includes('running')
+
+      return h('div', {}, [
+        // Status card
+        h('div', { class: 'card' }, [
+          h('div', { class: 'card-row', style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px' } }, [
+            h('div', {
+              style: {
+                width: '8px', height: '8px', borderRadius: '50%', flexShrink: '0',
+                background: isRunning ? 'var(--green)' : 'var(--red)',
+                boxShadow: isRunning ? '0 0 8px rgba(52,199,89,0.4)' : '0 0 8px rgba(255,59,48,0.4)',
+              },
+            }),
+            h('div', { style: { flex: '1' } }, [
+              h('div', { style: { fontWeight: '600', fontSize: '13px' } }, isRunning ? 'Running' : 'Stopped'),
+              h('div', { style: { fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' } },
+                [info['version'], currentModel.value, info['uptime']].filter(Boolean).join(' · ') || statusRaw.value.split('\n')[0]
+              ),
+            ]),
+          ]),
+          ...Object.entries(info).slice(0, 10).map(([k, v]) =>
+            h('div', { class: 'card-row', style: { display: 'flex', justifyContent: 'space-between', padding: '8px 14px', fontSize: '12px' } }, [
+              h('span', { style: { color: 'var(--text-secondary)', textTransform: 'capitalize' } }, k),
+              h('span', { style: { fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'right', maxWidth: '60%', wordBreak: 'break-all' } }, v),
+            ])
+          ),
+        ]),
+
+        // Gateway controls
+        h('div', { class: 'section-label', style: { marginTop: '12px' } }, 'Gateway'),
+        h('div', { class: 'card', style: { padding: '12px 14px' } }, [
+          h('div', { style: { fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', fontFamily: 'var(--mono)', whiteSpace: 'pre-wrap', maxHeight: '80px', overflow: 'auto' } },
+            gatewayRaw.value || 'No info'
+          ),
+          h('div', { style: { display: 'flex', gap: '8px' } }, [
+            h('button', {
+              class: 'files-btn', style: { flex: '1', textAlign: 'center', padding: '7px' },
+              onClick: () => gatewayAction('restart'),
+              disabled: restarting.value,
+            }, restarting.value ? 'Restarting...' : 'Restart'),
+            h('button', {
+              class: 'files-btn', style: { flex: '1', textAlign: 'center', padding: '7px' },
+              onClick: () => gatewayAction(isRunning ? 'stop' : 'start'),
+              disabled: restarting.value,
+            }, isRunning ? 'Stop' : 'Start'),
+          ]),
+        ]),
+      ])
+    }
+
+    function renderModels() {
+      const allModels = []
+      for (const prov of providers.value) {
+        for (const m of prov.models) {
+          allModels.push({ ...m, provider: prov.name })
+        }
+      }
+
+      return h('div', {}, [
+        // Current / Default model
+        h('div', { class: 'card', style: { padding: '12px 14px', marginBottom: '8px' } }, [
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, [
+            h('div', {}, [
+              h('div', { style: { fontSize: '11px', color: 'var(--text-tertiary)', marginBottom: '4px' } }, 'Active Model'),
+              h('div', { style: { fontSize: '13px', fontWeight: '600', fontFamily: 'var(--mono)' } }, currentModel.value || 'unknown'),
+            ]),
+            defaultModel.value
+              ? h('div', { style: { textAlign: 'right' } }, [
+                  h('div', { style: { fontSize: '11px', color: 'var(--text-tertiary)', marginBottom: '4px' } }, 'Default'),
+                  h('div', { style: { fontSize: '12px', fontFamily: 'var(--mono)', color: 'var(--text-secondary)' } }, defaultModel.value),
+                ])
+              : null,
+          ]),
+        ]),
+
+        // Providers
+        h('div', { class: 'section-label' }, `Providers (${providers.value.length})`),
+        ...providers.value.map(prov => {
+          const tr = testResults[prov.name]
+          const isTesting = testingProvider.value === prov.name
+
+          return h('div', { class: 'card', style: { marginBottom: '6px' } }, [
+            // Provider header
+            h('div', {
+              class: 'card-row',
+              style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', cursor: 'pointer' },
+            }, [
+              h('div', { style: { flex: '1' } }, [
+                h('div', { style: { fontSize: '13px', fontWeight: '500' } }, prov.name),
+                h('div', { style: { fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--mono)', marginTop: '2px' } },
+                  prov.baseUrl.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+                ),
+              ]),
+              h('span', { style: { fontSize: '10px', color: 'var(--text-tertiary)', padding: '2px 6px', background: 'var(--bg-surface)', borderRadius: '4px' } }, prov.api),
+              // Test button
+              h('button', {
+                class: 'files-btn',
+                style: { fontSize: '10px', padding: '3px 8px' },
+                onClick: (e) => { e.stopPropagation(); testProvider(prov.name) },
+                disabled: isTesting,
+              }, isTesting ? '...' : 'Test'),
+              // Test result
+              tr ? h('span', {
+                style: {
+                  fontSize: '10px', fontFamily: 'var(--mono)',
+                  color: tr.ok ? 'var(--green)' : 'var(--red)',
+                },
+              }, tr.ok ? `${tr.latency}ms` : tr.status) : null,
+            ]),
+
+            // Models in this provider
+            ...prov.models.map(m => {
+              const isActive = currentModel.value && (
+                currentModel.value === `${prov.name}/${m.id}` ||
+                currentModel.value === m.id
+              )
+              return h('div', {
+                class: 'card-row',
+                style: {
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  padding: '7px 14px 7px 28px', fontSize: '12px',
+                  background: isActive ? 'rgba(59,130,246,0.08)' : 'transparent',
+                  cursor: 'pointer',
+                },
+                onClick: () => {
+                  const fullId = `${prov.name}/${m.id}`
+                  if (confirm(`Set default model to ${fullId}?`)) {
+                    setDefaultModel(fullId)
+                  }
+                },
+                title: `Click to set as default\n${m.contextWindow ? 'Context: ' + (m.contextWindow / 1024) + 'K' : ''}${m.maxTokens ? ' · Max: ' + m.maxTokens : ''}`,
+              }, [
+                h('span', { style: { fontFamily: 'var(--mono)', flex: '1' } }, m.id),
+                m.reasoning ? h('span', { style: { fontSize: '9px', color: 'var(--accent)', padding: '1px 5px', background: 'rgba(59,130,246,0.1)', borderRadius: '3px' } }, 'reasoning') : null,
+                m.contextWindow ? h('span', { style: { fontSize: '10px', color: 'var(--text-tertiary)' } }, `${Math.round(m.contextWindow / 1024)}K`) : null,
+                isActive ? h('span', { style: { color: 'var(--green)', fontSize: '11px' } }, '✓') : null,
+              ])
+            }),
+          ])
+        }),
+
+        // All unique models summary
+        h('div', { class: 'section-label', style: { marginTop: '12px' } }, 'All Models'),
+        h('div', { class: 'card' },
+          [...new Set(allModels.map(m => m.id))].sort().map(id => {
+            const provs = allModels.filter(m => m.id === id).map(m => m.provider)
+            return h('div', { class: 'card-row', style: { display: 'flex', justifyContent: 'space-between', padding: '6px 14px', fontSize: '12px' } }, [
+              h('span', { style: { fontFamily: 'var(--mono)' } }, id),
+              h('span', { style: { fontSize: '10px', color: 'var(--text-tertiary)' } }, provs.join(', ')),
+            ])
+          })
+        ),
+      ])
+    }
+
+    function renderConfig() {
+      if (!rawConfig.value) return h('div', { class: 'empty' }, 'No config loaded')
+      return h('div', { class: 'card', style: { padding: '12px 14px' } },
+        h('pre', {
+          style: {
+            fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text-secondary)',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0', maxHeight: '500px', overflow: 'auto',
+          },
+        }, JSON.stringify(rawConfig.value, null, 2))
+      )
+    }
+
+    function renderLogs() {
+      if (!logs.value) return h('div', { class: 'empty' }, 'No logs available')
+      return h('div', { class: 'card', style: { padding: '12px 14px' } },
+        h('pre', {
+          style: {
+            fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--text-tertiary)',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0', maxHeight: '500px', overflow: 'auto',
+          },
+        }, logs.value)
+      )
+    }
+
+    // ── Main render ──
+
     return () => {
       if (!state.selectedDevice) {
         return h('div', { class: 'empty' }, [
@@ -88,106 +361,27 @@ export default defineComponent({
         return h('div', { class: 'loading' }, 'Loading...')
       }
 
-      const sections = []
-      const info = parseStatus(statusRaw.value)
-      const gwInfo = parseStatus(gatewayRaw.value)
-
-      // Status card
-      const isRunning = gatewayRaw.value.toLowerCase().includes('running') || gwInfo['status']?.toLowerCase().includes('running')
-      sections.push(
-        h('div', { class: 'section-label' }, 'Status'),
-        h('div', { class: 'card' }, [
-          h('div', { class: 'card-row', style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px' } }, [
-            h('div', {
-              style: {
-                width: '8px', height: '8px', borderRadius: '50%',
-                background: isRunning ? 'var(--green)' : 'var(--red)',
-                boxShadow: isRunning ? '0 0 8px rgba(52,199,89,0.4)' : '0 0 8px rgba(255,59,48,0.4)',
-              },
-            }),
-            h('div', { style: { flex: '1' } }, [
-              h('div', { style: { fontWeight: '600', fontSize: '13px' } }, isRunning ? 'Running' : 'Stopped'),
-              h('div', { style: { fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' } },
-                [info['version'], info['model'], info['uptime']].filter(Boolean).join(' · ') || statusRaw.value.split('\n')[0]
-              ),
-            ]),
-          ]),
-          // Show parsed status lines
-          ...Object.entries(info).slice(0, 8).map(([k, v]) =>
-            h('div', { class: 'card-row', style: { display: 'flex', justifyContent: 'space-between', padding: '8px 14px', fontSize: '12px' } }, [
-              h('span', { style: { color: 'var(--text-secondary)', textTransform: 'capitalize' } }, k),
-              h('span', { style: { fontFamily: 'var(--mono)', fontSize: '11px' } }, v),
-            ])
-          ),
-        ])
-      )
-
-      // Gateway controls
-      sections.push(
-        h('div', { class: 'section-label' }, 'Gateway'),
-        h('div', { class: 'card', style: { padding: '12px 14px' } }, [
-          h('div', { style: { fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', fontFamily: 'var(--mono)', whiteSpace: 'pre-wrap' } },
-            gatewayRaw.value || 'No info'
-          ),
-          h('div', { style: { display: 'flex', gap: '8px' } }, [
-            h('button', {
-              class: 'files-btn',
-              style: { flex: '1', textAlign: 'center', padding: '7px' },
-              onClick: () => gatewayAction('restart'),
-              disabled: restarting.value,
-            }, restarting.value ? 'Restarting...' : 'Restart'),
-            h('button', {
-              class: 'files-btn',
-              style: { flex: '1', textAlign: 'center', padding: '7px' },
-              onClick: () => gatewayAction(isRunning ? 'stop' : 'start'),
-              disabled: restarting.value,
-            }, isRunning ? 'Stop' : 'Start'),
-          ]),
-        ])
-      )
-
-      // Config
-      if (configJson.value) {
-        sections.push(
-          h('div', { class: 'section-label' }, 'Config'),
-          h('div', { class: 'card', style: { padding: '12px 14px' } },
-            h('pre', {
-              style: {
-                fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text-secondary)',
-                whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0', maxHeight: '200px', overflow: 'auto',
-              },
-            }, JSON.stringify(configJson.value, null, 2))
-          )
-        )
+      const tabContent = {
+        status: renderStatus,
+        models: renderModels,
+        config: renderConfig,
+        logs: renderLogs,
       }
 
-      // Logs
-      if (logs.value) {
-        sections.push(
-          h('div', { class: 'section-label' }, 'Logs'),
-          h('div', { class: 'card', style: { padding: '12px 14px' } },
-            h('pre', {
-              style: {
-                fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--text-tertiary)',
-                whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0', maxHeight: '300px', overflow: 'auto',
-              },
-            }, logs.value)
-          )
-        )
-      }
-
-      // Refresh
-      sections.push(
-        h('div', { style: { padding: '8px 12px' } },
+      return h('div', { style: { display: 'flex', flexDirection: 'column', height: '100%' } }, [
+        renderTabs(),
+        h('div', { style: { flex: '1', overflow: 'auto', padding: '4px 0' } }, [
+          (tabContent[activeTab.value] || renderStatus)(),
+        ]),
+        // Refresh bar
+        h('div', { style: { padding: '6px 12px', borderTop: '1px solid var(--border)', flexShrink: '0' } },
           h('button', {
             class: 'files-btn',
-            style: { width: '100%', textAlign: 'center', padding: '8px' },
+            style: { width: '100%', textAlign: 'center', padding: '7px' },
             onClick: refresh,
           }, loading.value ? 'Refreshing...' : 'Refresh')
-        )
-      )
-
-      return h('div', { style: { padding: '4px 0' } }, sections)
+        ),
+      ])
     }
   },
 })

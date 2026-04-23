@@ -396,6 +396,20 @@ body {
 .net-latency-mid { background: rgba(255,149,0,0.12); color: var(--orange); }
 .net-latency-bad { background: var(--red-dim); color: var(--red); }
 .net-latency-none { background: var(--bg-surface); color: var(--text-tertiary); }
+
+/* Claw Monitor */
+.claw-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border);
+  padding: 0 12px; flex-shrink: 0;
+}
+.claw-tab {
+  padding: 8px 14px; font-size: 12px; font-weight: 500;
+  color: var(--text-tertiary); cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+.claw-tab:hover { color: var(--text-secondary); }
+.claw-tab.active { color: var(--text-primary); border-bottom-color: var(--accent); }
 </style>
 </head>
 <body>
