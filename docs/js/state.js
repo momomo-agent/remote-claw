@@ -10,7 +10,6 @@ export const detachedDevice = urlParams.get('device')
 export const ALL_APPS = [
   { id: 'shell',    label: 'Shell',    icon: '⌨',  canDetach: true,  needsDevice: true },
   { id: 'files',    label: 'Files',    icon: '📁', canDetach: true,  needsDevice: true },
-  { id: 'terminal', label: 'Terminal', icon: '▶',  canDetach: true,  needsDevice: true },
   { id: 'vscode',   label: 'VS Code',  icon: '💻', canDetach: 'only', needsDevice: true },
   { id: 'browser',  label: 'Browser',  icon: '🌐', canDetach: 'only', needsDevice: true },
   { id: 'screen',   label: 'Screen',   icon: '🖥', canDetach: 'only', needsDevice: true },
