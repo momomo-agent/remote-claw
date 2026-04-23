@@ -59,7 +59,7 @@ Usage:
     if (!Array.isArray(data) || !data.length) { console.log("No devices online"); return; }
     for (const d of data) {
       const dur = d.connectedFor < 60 ? `${d.connectedFor}s` : d.connectedFor < 3600 ? `${Math.floor(d.connectedFor/60)}m` : `${Math.floor(d.connectedFor/3600)}h`;
-      console.log(`  ${d.name}  [${(d.capabilities||[]).join(",")}]  up ${dur}`);
+      console.log(`  ${d.name}  up ${dur}`);
     }
     return;
   }
@@ -142,7 +142,7 @@ async function shell(deviceArg) {
       device = data[0].id;
     } else {
       console.log("Online devices:");
-      data.forEach((d, i) => console.log(`  ${i + 1}) ${d.name}  [${(d.capabilities||[]).join(",")}]`));
+      data.forEach((d, i) => console.log(`  ${i + 1}) ${d.name}`));
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
       const choice = await new Promise(r => rl.question("Select device [1]: ", a => { rl.close(); r(a); }));
       const idx = parseInt(choice || "1") - 1;

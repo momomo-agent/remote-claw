@@ -148,7 +148,7 @@ export default {
 interface DeviceConn {
   ws: WebSocket;
   name: string;
-  capabilities: string[];
+
   connectedAt: number;
 }
 
@@ -204,7 +204,7 @@ export class DeviceHub {
 
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
-      this.handleWs(server, deviceName, url.searchParams.get("capabilities") || "");
+      this.handleWs(server, deviceName);
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -213,7 +213,7 @@ export class DeviceHub {
       const list = Array.from(this.devices.entries()).map(([id, d]) => ({
         id,
         name: d.name,
-        capabilities: d.capabilities,
+
         connectedAt: d.connectedAt,
         connectedFor: Math.round((Date.now() - d.connectedAt) / 1000),
       }));
@@ -346,12 +346,11 @@ export class DeviceHub {
     return err("not found", 404);
   }
 
-  private handleWs(ws: WebSocket, deviceName: string, capStr: string) {
+  private handleWs(ws: WebSocket, deviceName: string) {
     ws.accept();
-    const capabilities = capStr ? capStr.split(",") : ["shell"];
     const deviceId = deviceName;
 
-    this.devices.set(deviceId, { ws, name: deviceName, capabilities, connectedAt: Date.now() });
+    this.devices.set(deviceId, { ws, name: deviceName, connectedAt: Date.now() });
 
     ws.addEventListener("message", (event) => {
       try {

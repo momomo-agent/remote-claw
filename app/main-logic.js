@@ -52,7 +52,7 @@ function loadConfig() {
       server: "wss://remote.momomo.dev",
       token: "CHANGE_ME",
       deviceName: os.hostname(),
-      capabilities: ["shell"],
+
     };
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2));
   }
@@ -106,7 +106,7 @@ let manualDisconnect = false;
 
 function connectDaemon() {
   const appDeviceId = `app-${config.deviceName || os.hostname()}`;
-  const url = `${config.server}/ws?device=${encodeURIComponent(appDeviceId)}&token=${encodeURIComponent(config.token)}&capabilities=`;
+  const url = `${config.server}/ws?device=${encodeURIComponent(appDeviceId)}&token=${encodeURIComponent(config.token)}`;
   daemonWs = new WebSocket(url);
 
   daemonWs.on("open", () => {
@@ -132,6 +132,10 @@ function connectDaemon() {
       if (msg.type === "shell-data" || msg.type === "shell-exit") {
         sendToRenderer(msg.type, msg);
       }
+      // File receive
+      if (msg.type === "file-start") handleIncomingFileStart(msg);
+      if (msg.type === "file-chunk") handleIncomingFileChunk(msg);
+      if (msg.type === "file-end") handleIncomingFileEnd(msg);
     } catch {}
   });
 
@@ -156,6 +160,36 @@ function sendToRenderer(channel, data) {
         win.webContents.send(channel, data);
       }
     }
+  }
+}
+
+// ── File Receive ──
+
+const incomingTransfers = new Map();
+
+function handleIncomingFileStart(msg) {
+  const destPath = msg.remotePath.replace(/^~/, os.homedir());
+  const dir = path.dirname(destPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const fd = fs.openSync(destPath, "w");
+  incomingTransfers.set(msg.transferId, { fd, path: destPath, received: 0, total: msg.totalChunks });
+}
+
+function handleIncomingFileChunk(msg) {
+  const t = incomingTransfers.get(msg.transferId);
+  if (!t) return;
+  const buf = Buffer.from(msg.data, "base64");
+  fs.writeSync(t.fd, buf, 0, buf.length);
+  t.received++;
+}
+
+function handleIncomingFileEnd(msg) {
+  const t = incomingTransfers.get(msg.transferId);
+  if (!t) return;
+  fs.closeSync(t.fd);
+  incomingTransfers.delete(msg.transferId);
+  if (daemonWs?.readyState === WebSocket.OPEN) {
+    daemonWs.send(JSON.stringify({ type: "result", taskId: msg.transferId, stdout: `Received: ${t.path}\n`, stderr: "", exitCode: 0 }));
   }
 }
 
