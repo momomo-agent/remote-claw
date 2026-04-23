@@ -76,6 +76,10 @@ function connect() {
       if (msg.type === "shell-input") handleShellInput(msg);
       if (msg.type === "shell-resize") handleShellResize(msg);
       if (msg.type === "shell-close") handleShellClose(msg);
+      // Screen capture + remote input
+      if (msg.type === "screen-start") handleScreenStart(msg);
+      if (msg.type === "screen-stop") handleScreenStop(msg);
+      if (msg.type === "screen-input") handleScreenInput(msg);
     } catch (e) {
       console.error("Bad message:", e.message);
     }
@@ -212,6 +216,171 @@ function resetShellIdle(sessionId, session) {
 
 function wsSend(msg) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+// ── Screen Capture + Remote Input ──
+
+const screenSessions = new Map(); // sessionId -> { interval, from, quality, fps }
+const SCREEN_TMP = path.join(os.tmpdir(), "remoteclaw-screen.jpg");
+
+function handleScreenStart(msg) {
+  const sid = msg.sessionId || "default";
+  if (screenSessions.has(sid)) handleScreenStop({ sessionId: sid });
+
+  const fps = Math.min(msg.fps || 2, 10); // cap at 10fps
+  const quality = msg.quality || 30;
+  const intervalMs = Math.round(1000 / fps);
+
+  console.log(`[screen] start: ${sid} ${fps}fps q${quality} for ${msg.from}`);
+
+  // Capture immediately, then on interval
+  captureAndSend(sid, msg.from, quality);
+  const interval = setInterval(() => captureAndSend(sid, msg.from, quality), intervalMs);
+  screenSessions.set(sid, { interval, from: msg.from, quality, fps });
+}
+
+function handleScreenStop(msg) {
+  const sid = msg.sessionId || "default";
+  const session = screenSessions.get(sid);
+  if (!session) return;
+  console.log(`[screen] stop: ${sid}`);
+  clearInterval(session.interval);
+  screenSessions.delete(sid);
+}
+
+let captureInFlight = false;
+
+function captureAndSend(sessionId, to, quality) {
+  if (captureInFlight) return; // skip frame if previous still in flight
+  captureInFlight = true;
+
+  const tmpFile = SCREEN_TMP + "." + sessionId;
+  // screencapture: -x no sound, -t jpg, -l0 main display
+  const proc = spawn("screencapture", ["-x", "-t", "jpg", "-l0", tmpFile], {
+    env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
+    timeout: 5000,
+  });
+
+  proc.on("close", (code) => {
+    captureInFlight = false;
+    if (code !== 0) return;
+    try {
+      // Resize to max 1280 width for bandwidth, using sips (built-in macOS)
+      const { execSync } = require("child_process");
+      const info = execSync(`sips -g pixelWidth "${tmpFile}" 2>/dev/null`, { encoding: "utf-8" });
+      const wMatch = info.match(/pixelWidth:\s*(\d+)/);
+      const origW = wMatch ? parseInt(wMatch[1]) : 1920;
+      if (origW > 1280) {
+        execSync(`sips --resampleWidth 1280 -s formatOptions ${quality} "${tmpFile}" --out "${tmpFile}" 2>/dev/null`);
+      } else {
+        execSync(`sips -s formatOptions ${quality} "${tmpFile}" --out "${tmpFile}" 2>/dev/null`);
+      }
+
+      const buf = fs.readFileSync(tmpFile);
+      const b64 = buf.toString("base64");
+      wsSend({
+        type: "screen-frame",
+        sessionId,
+        data: b64,
+        width: Math.min(origW, 1280),
+        timestamp: Date.now(),
+        to,
+      });
+      fs.unlinkSync(tmpFile);
+    } catch (e) {
+      // ignore read errors
+    }
+  });
+
+  proc.on("error", () => { captureInFlight = false; });
+}
+
+function handleScreenInput(msg) {
+  // msg: { action, x, y, button, key, text, modifiers }
+  const cmds = [];
+  const { action, x, y, key, text } = msg;
+
+  switch (action) {
+    case "click":
+      cmds.push(`c:${Math.round(x)},${Math.round(y)}`);
+      break;
+    case "rightclick":
+      cmds.push(`rc:${Math.round(x)},${Math.round(y)}`);
+      break;
+    case "doubleclick":
+      cmds.push(`dc:${Math.round(x)},${Math.round(y)}`);
+      break;
+    case "mousedown":
+      cmds.push(`dd:${Math.round(x)},${Math.round(y)}`);
+      break;
+    case "mousemove":
+      cmds.push(`dm:${Math.round(x)},${Math.round(y)}`);
+      break;
+    case "mouseup":
+      cmds.push(`du:${Math.round(x)},${Math.round(y)}`);
+      break;
+    case "scroll": {
+      // Move mouse to position first, then simulate scroll via cliclick arrow keys
+      const dy = msg.deltaY || 0;
+      const scrollDir = dy > 0 ? "arrow-down" : "arrow-up";
+      const steps = Math.max(1, Math.min(Math.abs(Math.round(dy / 40)), 10));
+      if (x != null && y != null) cmds.push(`m:${Math.round(x)},${Math.round(y)}`);
+      for (let i = 0; i < steps; i++) cmds.push(`kp:${scrollDir}`);
+      break;
+    }
+    case "type":
+      if (text) cmds.push(`t:'${text.replace(/'/g, "'")}'`);
+      break;
+    case "keydown":
+      if (key) {
+        const mapped = mapKey(key);
+        if (mapped.mod) cmds.push(`kd:${mapped.mod}`);
+        else cmds.push(`kp:${mapped.key}`);
+      }
+      break;
+    case "keyup":
+      if (key) {
+        const mapped = mapKey(key);
+        if (mapped.mod) cmds.push(`ku:${mapped.mod}`);
+      }
+      break;
+    case "keypress":
+      if (key) {
+        const mapped = mapKey(key);
+        if (mapped.mod) {
+          cmds.push(`kd:${mapped.mod}`);
+          cmds.push(`ku:${mapped.mod}`);
+        } else {
+          cmds.push(`kp:${mapped.key}`);
+        }
+      }
+      break;
+  }
+
+  if (cmds.length > 0) {
+    const cmd = cmds.join(" ");
+    spawn("cliclick", cmd.split(" "), {
+      env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
+      timeout: 5000,
+    });
+  }
+}
+
+function mapKey(jsKey) {
+  // Map JS key names to cliclick key names
+  const modMap = { Meta: "cmd", Control: "ctrl", Alt: "alt", Shift: "shift" };
+  if (modMap[jsKey]) return { mod: modMap[jsKey] };
+
+  const keyMap = {
+    Enter: "return", Backspace: "delete", Delete: "fwd-delete",
+    Tab: "tab", Escape: "esc", " ": "space", Space: "space",
+    ArrowUp: "arrow-up", ArrowDown: "arrow-down",
+    ArrowLeft: "arrow-left", ArrowRight: "arrow-right",
+    Home: "home", End: "end", PageUp: "page-up", PageDown: "page-down",
+    F1: "f1", F2: "f2", F3: "f3", F4: "f4", F5: "f5", F6: "f6",
+    F7: "f7", F8: "f8", F9: "f9", F10: "f10", F11: "f11", F12: "f12",
+  };
+  return { key: keyMap[jsKey] || jsKey.toLowerCase() };
 }
 
 // ── Keepalive ──

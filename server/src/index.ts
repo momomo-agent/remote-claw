@@ -389,6 +389,15 @@ export class DeviceHub {
             target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
           }
         }
+
+        // Screen capture relay — forward between devices
+        if (msg.type === "screen-start" || msg.type === "screen-stop" || msg.type === "screen-input" ||
+            msg.type === "screen-frame") {
+          const target = this.devices.get(msg.to);
+          if (target) {
+            target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
+          }
+        }
       } catch {}
     });
 

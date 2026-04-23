@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>RemoteClaw — Screen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #161618;
+  --bg-raised: #1e1e21;
+  --bg-surface: #252528;
+  --bg-hover: #2a2a2e;
+  --text-primary: #ececf0;
+  --text-secondary: #8e8e93;
+  --text-tertiary: #56565a;
+  --accent: #3b82f6;
+  --green: #34c759;
+  --green-dim: rgba(52,199,89,0.12);
+  --red: #ff3b30;
+  --border: rgba(255,255,255,0.06);
+  --font: "Geist", -apple-system, system-ui, sans-serif;
+  --mono: "Geist Mono", "SF Mono", Menlo, monospace;
+  --radius: 8px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+/* Toolbar */
+.toolbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.toolbar select, .toolbar input {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: var(--radius);
+  outline: none;
+}
+.toolbar select:focus, .toolbar input:focus { border-color: var(--accent); }
+.toolbar label { font-size: 11px; color: var(--text-secondary); }
+.toolbar .spacer { flex: 1; }
+
+.btn {
+  padding: 5px 12px;
+  border-radius: var(--radius);
+  border: none;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { filter: brightness(1.1); }
+.btn-danger { background: var(--red); color: white; }
+.btn-danger:hover { filter: brightness(1.1); }
+.btn:disabled { opacity: 0.4; cursor: default; }
+
+.status {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-secondary);
+}
+.status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.status-dot.on { background: var(--green); box-shadow: 0 0 6px rgba(52,199,89,0.4); }
+.status-dot.streaming { background: var(--accent); box-shadow: 0 0 6px rgba(59,130,246,0.4); }
+
+/* Canvas area */
+.canvas-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  background: #0a0a0b;
+}
+#screen-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: default;
+  image-rendering: auto;
+}
+.canvas-wrap.interactive #screen-canvas { cursor: crosshair; }
+
+/* Stats overlay */
+.stats {
+  position: absolute;
+  top: 8px; right: 8px;
+  background: rgba(0,0,0,0.7);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+/* Empty state */
+.empty-state {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 12px; color: var(--text-tertiary);
+  height: 100%;
+}
+.empty-state .icon { font-size: 48px; opacity: 0.3; }
+.empty-state .text { font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="toolbar">
+    <label>Server</label>
+    <input id="server-url" placeholder="wss://remote.momomo.dev" value="wss://remote.momomo.dev" style="width:220px">
+    <label>Token</label>
+    <input id="token" type="password" placeholder="rclaw-..." style="width:140px">
+    <button class="btn btn-primary" id="btn-connect">Connect</button>
+    <div class="spacer"></div>
+    <label>Device</label>
+    <select id="device-select"><option value="">—</option></select>
+    <label>FPS</label>
+    <select id="fps-select">
+      <option value="1">1</option>
+      <option value="2" selected>2</option>
+      <option value="4">4</option>
+      <option value="6">6</option>
+      <option value="10">10</option>
+    </select>
+    <label>Quality</label>
+    <select id="quality-select">
+      <option value="15">Low</option>
+      <option value="30" selected>Med</option>
+      <option value="50">High</option>
+      <option value="75">Best</option>
+    </select>
+    <button class="btn btn-primary" id="btn-start" disabled>Start</button>
+    <button class="btn btn-danger" id="btn-stop" disabled>Stop</button>
+    <div class="status">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">Disconnected</span>
+    </div>
+  </div>
+  <div class="canvas-wrap" id="canvas-wrap">
+    <canvas id="screen-canvas" width="1280" height="800"></canvas>
+    <div class="stats" id="stats" style="display:none"></div>
+  </div>
+</div>
+<script src="screen.js"></script>
+</body>
+</html>
