@@ -901,8 +901,9 @@ mb.on("after-create-window", () => {
   mb.window.removeAllListeners("blur");
   mb.window.on("blur", () => { if (!isPinned) mb.hideWindow(); });
   mb.window.on("hide", () => sendToRenderer("window-hidden", {}));
-  const origHide = mb.window.hide.bind(mb.window);
-  mb.window.hide = () => { if (!isPinned) origHide(); };
+  // Override both hide paths to respect pin
+  const origHide = mb.hideWindow.bind(mb);
+  mb.hideWindow = () => { if (!isPinned) origHide(); };
 });
 
 mb.on("show", () => { if (isPinned) return; });

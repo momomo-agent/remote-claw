@@ -30,32 +30,11 @@ const App = defineComponent({
 
       // Special handlers
       if (appId === 'vscode') {
-        state.promptModal = {
-          title: 'code-server port (default 8080)',
-          placeholder: '8080',
-          defaultValue: '8080',
-          onSubmit: async (val) => {
-            state.promptModal = null
-            if (val) {
-              const result = await api.invoke('open-code-server', { device: state.selectedDevice, port: parseInt(val) })
-              if (result?.error) {
-                showToast('VS Code: ' + result.error, 'error')
-              }
-            }
-          },
-        }
+        api.invoke('open-code-server', { device: state.selectedDevice, port: 8080 })
         return
       }
       if (appId === 'browser') {
-        state.promptModal = {
-          title: 'Enter port number',
-          placeholder: '3000',
-          defaultValue: '3000',
-          onSubmit: (val) => {
-            state.promptModal = null
-            if (val) api.invoke('open-browser', { device: state.selectedDevice, port: parseInt(val), path: '/' })
-          },
-        }
+        api.invoke('open-browser', { device: state.selectedDevice, port: 3000, path: '/' })
         return
       }
 
