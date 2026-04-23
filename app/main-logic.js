@@ -11,6 +11,16 @@ const os = require("os");
 
 // App directory — always the real app location, even when loaded from cache
 const APP_DIR = path.dirname(require.main?.filename || __dirname);
+const LOADING_HTML = path.join(APP_DIR, "loading.html");
+
+// Load a BrowserWindow with loading splash, then navigate to target URL
+function loadWithSplash(win, targetUrl) {
+  win.loadFile(LOADING_HTML);
+  win.webContents.on('did-finish-load', function onSplash() {
+    win.webContents.removeListener('did-finish-load', onSplash);
+    win.loadURL(targetUrl);
+  });
+}
 
 // ── Auto-install rclaw CLI ──
 
@@ -270,6 +280,7 @@ ipcMain.handle("open-tab-window", (_, { tab, device, title }) => {
   const win = new BrowserWindow({
     width: w, height: h, minWidth: 400, minHeight: 300,
     title: title || `RemoteClaw — ${tab}`,
+    backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
@@ -280,7 +291,7 @@ ipcMain.handle("open-tab-window", (_, { tab, device, title }) => {
   url.searchParams.set("tab", tab);
   url.searchParams.set("device", device || "");
   url.searchParams.set("detached", "1");
-  win.loadURL(url.toString());
+  loadWithSplash(win, url.toString());
 
   detachedWindows.set(tab, win);
   trackIndependentWindow(win);
@@ -294,6 +305,7 @@ ipcMain.handle("open-preview", (_, { file, device, title }) => {
   const win = new BrowserWindow({
     width: 900, height: 620, minWidth: 600, minHeight: 400,
     title: title || `Preview — ${file.split('/').pop()}`,
+    backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
@@ -301,7 +313,7 @@ ipcMain.handle("open-preview", (_, { file, device, title }) => {
   const url = new URL(CLOUD_URL + "preview.html");
   url.searchParams.set("file", file);
   url.searchParams.set("device", device || "");
-  win.loadURL(url.toString());
+  loadWithSplash(win, url.toString());
   trackIndependentWindow(win);
   return { ok: true };
 });
@@ -312,6 +324,7 @@ ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
   const win = new BrowserWindow({
     width: 1100, height: 700, minWidth: 700, minHeight: 500,
     title: title || "RemoteClaw Editor",
+    backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
@@ -320,7 +333,7 @@ ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
   if (dir) url.searchParams.set("dir", dir);
   if (file) url.searchParams.set("file", file);
   if (device) url.searchParams.set("device", device);
-  try { await win.loadURL(url.toString()); } catch(e) { console.error("editor load failed:", e.message); }
+  loadWithSplash(win, url.toString());
   trackIndependentWindow(win);
   return { ok: true };
 });
@@ -343,6 +356,7 @@ ipcMain.handle("open-code-server", async (_, { device, folder }) => {
   const win = new BrowserWindow({
     width: 1280, height: 800, minWidth: 800, minHeight: 600,
     title: "VS Code " + String.fromCharCode(0x2014) + " " + (device || "local"),
+    backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
@@ -371,6 +385,7 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
   const win = new BrowserWindow({
     width: 1100, height: 750, minWidth: 600, minHeight: 400,
     title: `${device}:${port}`,
+    backgroundColor: '#161618',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
@@ -438,11 +453,12 @@ const LOCAL_URL = `file://${path.join(APP_DIR, "renderer", "index.html")}`;
 installCLI();
 
 mb = menubar({
-  index: CLOUD_URL,
+  index: `file://${LOADING_HTML}`,
   icon: createTrayIcon(false),
   preloadWindow: true,
   browserWindow: {
     width: 420, height: 560, minWidth: 320, minHeight: 400,
+    backgroundColor: '#161618',
     webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(APP_DIR, "preload.js") },
     resizable: true, skipTaskbar: true,
   },
@@ -450,6 +466,13 @@ mb = menubar({
 });
 
 mb.on("ready", () => {
+  // Navigate to cloud UI after splash
+  if (mb.window) {
+    mb.window.webContents.on('did-finish-load', function onSplash() {
+      mb.window.webContents.removeListener('did-finish-load', onSplash);
+      mb.window.loadURL(CLOUD_URL);
+    });
+  }
   connectDaemon();
 
   const { Menu } = require("electron");
