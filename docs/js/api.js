@@ -36,6 +36,7 @@ export async function refreshData() {
   try {
     const ds = await electronAPI.invoke('daemon-status')
     state.daemonRunning = ds?.running || false
+    state.daemonInstalled = ds?.installed || false
   } catch { state.daemonRunning = false }
   const [devices, history] = await Promise.all([
     apiFetch('/devices'),

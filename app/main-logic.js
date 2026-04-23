@@ -308,7 +308,19 @@ ipcMain.handle("win-is-always-on-top", () => mb?.window?.isAlwaysOnTop());
 ipcMain.handle("win-minimize", () => { if (mb?.window) mb.window.minimize(); });
 ipcMain.handle("win-maximize", () => { if (mb?.window) { mb.window.isMaximized() ? mb.window.unmaximize() : mb.window.maximize(); } return { maximized: mb?.window?.isMaximized() }; });
 ipcMain.handle("win-set-title", (_, { title }) => { if (mb?.window) mb.window.setTitle(title); });
-ipcMain.handle("daemon-status", () => ({ running: isDaemonRunning() }));
+ipcMain.handle("daemon-status", () => {
+  const running = isDaemonRunning();
+  const installed = fs.existsSync(DAEMON_ENTRY);
+  const hasLaunchAgent = fs.existsSync(LAUNCHAGENT_PLIST);
+  return { running, installed, hasLaunchAgent };
+});
+ipcMain.handle("daemon-restart", () => {
+  // Kill existing
+  try { const pid = parseInt(fs.readFileSync(DAEMON_PID_FILE, "utf-8").trim()); process.kill(pid, "SIGTERM"); } catch {}
+  // Wait a bit then start
+  setTimeout(() => startDaemon(), 500);
+  return { ok: true };
+});
 ipcMain.handle("win-set-opacity", (_, { opacity }) => { if (mb?.window) mb.window.setOpacity(opacity); });
 ipcMain.handle("win-open-devtools", () => { if (mb?.window) mb.window.webContents.openDevTools({ mode: "detach" }); });
 

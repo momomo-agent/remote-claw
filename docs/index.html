@@ -93,8 +93,10 @@ body {
 .device-title option { background: var(--bg-surface); color: var(--text-primary); }
 .daemon-badge {
   font-size: 10px; font-weight: 500; padding: 2px 6px; border-radius: 4px;
-  -webkit-app-region: no-drag; letter-spacing: 0.02em;
+  -webkit-app-region: no-drag; letter-spacing: 0.02em; cursor: pointer;
+  transition: opacity 0.2s ease;
 }
+.daemon-badge:hover { opacity: 1 !important; }
 .daemon-badge.running { color: var(--green); opacity: 0.7; }
 .daemon-badge.stopped { color: var(--red); opacity: 0.7; }
 .titlebar-right { display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }

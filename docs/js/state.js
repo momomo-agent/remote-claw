@@ -40,6 +40,7 @@ export const state = reactive({
   pinned: false,
   pinnedTabs: loadPinned(),
   daemonRunning: false,
+  daemonInstalled: false,
 })
 
 export function savePinnedTabs() {

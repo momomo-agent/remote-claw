@@ -175,7 +175,11 @@ const App = defineComponent({
             h(DeviceSelect, { detached: false, onChange: handleDeviceChange }),
             h('div', {
               class: ['daemon-badge', state.daemonRunning ? 'running' : 'stopped'],
-              title: state.daemonRunning ? 'Daemon running' : 'Daemon stopped',
+              title: state.daemonRunning ? 'Daemon running (click to restart)' : state.daemonInstalled ? 'Daemon stopped (click to start)' : 'Daemon not installed (click to install)',
+              onClick: async () => {
+                await api.invoke('daemon-restart')
+                setTimeout(async () => { await refreshData() }, 2000)
+              },
             }, state.daemonRunning ? '● Daemon' : '○ Daemon'),
           ]),
           h('div', { class: 'titlebar-right' },
