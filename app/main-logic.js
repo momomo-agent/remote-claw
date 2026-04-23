@@ -69,10 +69,11 @@ function installDaemon() {
       return false;
     }
   }
-  // npm install
+  // npm install (check for actual ws module, not just node_modules dir)
   const daemonPkgDir = path.join(DAEMON_DIR, "daemon");
-  if (!fs.existsSync(path.join(daemonPkgDir, "node_modules"))) {
+  if (!fs.existsSync(path.join(daemonPkgDir, "node_modules", "ws"))) {
     try {
+      console.log("[daemon] Running npm install...");
       execSync("npm install --production", { cwd: daemonPkgDir, timeout: 60000, stdio: "pipe" });
     } catch (e) {
       console.log("[daemon] npm install failed:", e.message);
