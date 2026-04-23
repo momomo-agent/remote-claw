@@ -64,6 +64,7 @@ function render() {
     : state.tab === "terminal" ? renderTerminal()
     : state.tab === "shell" ? renderShell()
     : state.tab === "files" ? renderFiles()
+    : state.tab === "apps" ? renderApps()
     : renderShell();
 
   if (isDetached) {
@@ -92,7 +93,7 @@ function render() {
         </div>
       </div>
       <div class="tabbar">
-        ${['shell','files','devices','history','settings'].map(t => {
+        ${['shell','files','apps','devices','history','settings'].map(t => {
           const label = t === 'settings' ? '⚙' : t.charAt(0).toUpperCase() + t.slice(1);
           return `<div class="tabbar-item ${state.tab === t ? 'active' : ''}" data-tab="${t}">${label}</div>`;
         }).join('')}
@@ -382,6 +383,76 @@ function parseLsLine(line) {
   return { name, isDir, isSymlink, isFile: m[1] === '-', size: parseInt(m[3]), mtime: m[4] };
 }
 
+// ── Apps ──
+
+function renderApps() {
+  if (!state.selectedDevice) {
+    return `<div class="empty"><div class="empty-icon">📦</div><div class="empty-text">Select a device to see apps</div></div>`;
+  }
+
+  const recentPorts = JSON.parse(localStorage.getItem('rc-recent-ports') || '[]');
+
+  return `
+    <div class="section-label">Apps</div>
+    <div class="card">
+      <div class="card-row device-row" id="app-code-server">
+        <div class="device-icon">💻</div>
+        <div class="device-info">
+          <div class="device-name">VS Code</div>
+          <div class="device-detail">code-server on port 8080</div>
+        </div>
+        <div style="color:var(--text-tertiary);font-size:18px">›</div>
+      </div>
+      <div class="card-row device-row" id="app-browser">
+        <div class="device-icon">🌐</div>
+        <div class="device-info">
+          <div class="device-name">Browser</div>
+          <div class="device-detail">Access any local service</div>
+        </div>
+        <div style="color:var(--text-tertiary);font-size:18px">›</div>
+      </div>
+    </div>
+
+    <div class="section-label">Open Port</div>
+    <div class="card" style="padding:14px 16px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="settings-input" id="browser-port" type="number" placeholder="Port (e.g. 3000)" style="flex:1;margin:0" />
+        <input class="settings-input" id="browser-path" placeholder="Path (optional)" style="flex:1;margin:0" />
+        <button class="settings-save" id="browser-open" style="margin:0;padding:6px 16px;white-space:nowrap">Open</button>
+      </div>
+    </div>
+
+    ${recentPorts.length ? `
+      <div class="section-label">Recent</div>
+      <div class="card">
+        ${recentPorts.map(p => `
+          <div class="card-row device-row recent-port" data-port="${p.port}" data-path="${esc(p.path || '')}">
+            <div class="device-icon" style="font-size:14px;color:var(--text-secondary)">${p.port}</div>
+            <div class="device-info">
+              <div class="device-name">${esc(p.label || 'localhost:' + p.port)}</div>
+              <div class="device-detail">${esc(p.path || '/')}</div>
+            </div>
+            <div style="color:var(--text-tertiary);font-size:18px">›</div>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+  `;
+}
+
+function openBrowser(port, urlPath) {
+  if (!state.selectedDevice || !port) return;
+  const path = urlPath || '/';
+  api.invoke('open-browser', { device: state.selectedDevice, port: parseInt(port), path });
+
+  // Save to recent
+  let recent = JSON.parse(localStorage.getItem('rc-recent-ports') || '[]');
+  recent = recent.filter(r => !(r.port === parseInt(port) && r.path === path));
+  recent.unshift({ port: parseInt(port), path, label: `localhost:${port}${path}`, time: Date.now() });
+  if (recent.length > 8) recent = recent.slice(0, 8);
+  localStorage.setItem('rc-recent-ports', JSON.stringify(recent));
+}
+
 // ── Settings ──
 
 function renderSettings() {
@@ -484,6 +555,34 @@ function bindEvents() {
   const filesVscode = document.getElementById('files-vscode');
   if (filesVscode) filesVscode.addEventListener('click', () => {
     api.invoke('open-code-server', { device: state.selectedDevice, folder: state.filesPath });
+  });
+
+  // Apps tab events
+  const appCodeServer = document.getElementById('app-code-server');
+  if (appCodeServer) appCodeServer.addEventListener('click', () => {
+    api.invoke('open-code-server', { device: state.selectedDevice });
+  });
+  const appBrowser = document.getElementById('app-browser');
+  if (appBrowser) appBrowser.addEventListener('click', () => {
+    const port = prompt('Enter port number:', '3000');
+    if (port) openBrowser(port, '/');
+  });
+  const browserOpen = document.getElementById('browser-open');
+  if (browserOpen) browserOpen.addEventListener('click', () => {
+    const port = document.getElementById('browser-port')?.value;
+    const path = document.getElementById('browser-path')?.value || '/';
+    if (port) openBrowser(port, path);
+  });
+  const browserPort = document.getElementById('browser-port');
+  if (browserPort) browserPort.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const port = browserPort.value;
+      const path = document.getElementById('browser-path')?.value || '/';
+      if (port) openBrowser(port, path);
+    }
+  });
+  document.querySelectorAll('.recent-port').forEach(el => {
+    el.addEventListener('click', () => openBrowser(el.dataset.port, el.dataset.path));
   });
 
   document.querySelectorAll('.file-row[data-isdir="true"]').forEach(el => {

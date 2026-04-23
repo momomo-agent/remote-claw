@@ -353,6 +353,34 @@ ipcMain.handle("open-code-server", async (_, { device, folder }) => {
   return { ok: true };
 });
 
+ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
+  const { BrowserWindow } = require("electron");
+  const { startCodeServerProxy } = require("./code-server-proxy");
+
+  let server = "wss://remote.momomo.dev";
+  let token = "";
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".remoteclaw", "config.json"), "utf-8"));
+    server = cfg.server || server;
+    token = cfg.token || "";
+  } catch {}
+
+  const proxy = await startCodeServerProxy({ server, token, device, remotePort: port });
+  const browseUrl = proxy.url + (urlPath || "/");
+
+  const win = new BrowserWindow({
+    width: 1100, height: 750, minWidth: 600, minHeight: 400,
+    title: `${device}:${port}`,
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 12, y: 12 },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
+  });
+  win.loadURL(browseUrl);
+  win.on("closed", () => proxy.close());
+  trackIndependentWindow(win);
+  return { ok: true };
+});
+
 ipcMain.handle("read-file", async (_, p) => { try { return { data: fs.readFileSync(p, "utf-8") }; } catch (e) { return { error: e.message }; } });
 ipcMain.handle("write-file", async (_, { path: p, data }) => { try { fs.writeFileSync(p, data); return { ok: true }; } catch (e) { return { error: e.message }; } });
 ipcMain.handle("read-file-base64", async (_, p) => { try { return { data: fs.readFileSync(p).toString("base64"), size: fs.statSync(p).size }; } catch (e) { return { error: e.message }; } });
