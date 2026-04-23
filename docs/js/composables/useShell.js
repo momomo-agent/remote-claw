@@ -102,8 +102,8 @@ export function useShell() {
       clearTimeout(connectTimeout)
     }
     if (xterm) {
-      try { xterm.write(decodeURIComponent(escape(atob(msg.data)))) }
-      catch { xterm.write(atob(msg.data)) }
+      const bytes = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))
+      xterm.write(bytes)
     }
   }
 
