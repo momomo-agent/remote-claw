@@ -65,6 +65,7 @@ function connect() {
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data.toString());
+      if (msg.type !== "pong") console.log(`[ws] recv: ${msg.type}${msg.sessionId ? ' sid=' + msg.sessionId : ''}`);
       if (msg.type === "exec") execCommand(msg.taskId, msg.command);
       if (msg.type === "pong") { /* keepalive ack */ }
       // File transfer via WS relay

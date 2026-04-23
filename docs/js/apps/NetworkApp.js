@@ -13,15 +13,33 @@ async function execOnDevice(command, timeout = 10000) {
   return result.stdout?.trim() || ''
 }
 
+let _clashConfig = null
+async function getClashConfig() {
+  if (_clashConfig) return _clashConfig
+  const apiInfo = await execOnDevice(`defaults read com.west2online.ClashXPro apiPort 2>/dev/null && echo '---' && defaults read com.west2online.ClashXPro api-secret 2>/dev/null`, 5000)
+  let port = 9090, secret = ''
+  if (apiInfo) {
+    const parts = apiInfo.split('---').map(s => s.trim())
+    if (parts[0]) port = parseInt(parts[0]) || 9090
+    if (parts[1]) secret = parts[1]
+  }
+  _clashConfig = { port, secret }
+  return _clashConfig
+}
+
 async function clashGet(path) {
-  const raw = await execOnDevice(`curl -s http://127.0.0.1:9090${path}`, 5000)
+  const { port, secret } = await getClashConfig()
+  const headers = secret ? `-H 'Authorization: Bearer ${secret}'` : ''
+  const raw = await execOnDevice(`curl -s --noproxy '*' ${headers} http://127.0.0.1:${port}${path}`, 5000)
   if (!raw) return null
   try { return JSON.parse(raw) } catch { return null }
 }
 
 async function clashPut(path, body) {
+  const { port, secret } = await getClashConfig()
+  const headers = secret ? `-H 'Authorization: Bearer ${secret}'` : ''
   const json = JSON.stringify(body).replace(/'/g, "'\\''")
-  await execOnDevice(`curl -s -X PUT -H 'Content-Type: application/json' -d '${json}' http://127.0.0.1:9090${path}`, 5000)
+  await execOnDevice(`curl -s --noproxy '*' -X PUT -H 'Content-Type: application/json' ${headers} -d '${json}' http://127.0.0.1:${port}${path}`, 5000)
 }
 
 export default defineComponent({
@@ -80,7 +98,7 @@ export default defineComponent({
 
     async function testGroupLatency(groupName) {
       testingGroup.value = groupName
-      await execOnDevice(`curl -s 'http://127.0.0.1:9090/group/${encodeURIComponent(groupName)}/delay?url=http://www.gstatic.com/generate_204&timeout=5000'`, 15000)
+      await clashGet(`/group/${encodeURIComponent(groupName)}/delay?url=http://www.gstatic.com/generate_204&timeout=5000`)
       // Refresh to get updated delays
       const proxies = await clashGet('/proxies')
       if (proxies?.proxies) {
@@ -107,7 +125,7 @@ export default defineComponent({
     }
 
     async function checkConnectivity() {
-      const targets = ['google.com', 'github.com', 'api.openai.com']
+      const targets = ['google.com', 'github.com']
       connectivity.value = targets.map(t => ({ target: t, status: 'testing' }))
       for (let i = 0; i < targets.length; i++) {
         const result = await execOnDevice(`curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://${targets[i]}`, 8000)
