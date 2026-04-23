@@ -255,8 +255,8 @@ function captureAndSend(sessionId, to, quality) {
   captureInFlight = true;
 
   const tmpFile = SCREEN_TMP + "." + sessionId;
-  // screencapture: -x no sound, -t jpg, -l0 main display
-  const proc = spawn("screencapture", ["-x", "-t", "jpg", "-l0", tmpFile], {
+  // screencapture: -x no sound, -t jpg
+  const proc = spawn("screencapture", ["-x", "-t", "jpg", tmpFile], {
     env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
     timeout: 5000,
   });
