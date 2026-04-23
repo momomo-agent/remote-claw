@@ -87,6 +87,19 @@ function startDaemon() {
   if (isDaemonRunning()) { console.log("[daemon] Already running"); return; }
   if (!fs.existsSync(DAEMON_ENTRY) && !installDaemon()) return;
 
+  // Always ensure deps are installed before starting
+  const daemonPkgDir = path.join(DAEMON_DIR, "daemon");
+  if (!fs.existsSync(path.join(daemonPkgDir, "node_modules", "ws"))) {
+    console.log("[daemon] Dependencies missing, running npm install...");
+    try {
+      execSync("npm install --production", { cwd: daemonPkgDir, timeout: 60000, stdio: "pipe" });
+      console.log("[daemon] Dependencies installed");
+    } catch (e) {
+      console.log("[daemon] npm install failed:", e.message);
+      return;
+    }
+  }
+
   console.log("[daemon] Starting...");
   const nodeCmd = process.versions.electron ? "node" : process.execPath;
   const child = spawn(nodeCmd, [DAEMON_ENTRY], {
@@ -98,7 +111,6 @@ function startDaemon() {
   fs.writeFileSync(DAEMON_PID_FILE, String(child.pid));
   console.log(`[daemon] Started (pid ${child.pid})`);
 
-  // Install LaunchAgent for auto-start on boot
   installLaunchAgent();
 }
 
