@@ -42,6 +42,7 @@ export const state = reactive({
   daemonRunning: false,
   daemonInstalled: false,
   updateAvailable: null, // { current, next, needsDmg }
+  promptModal: null, // { title, placeholder, defaultValue, onSubmit }
 })
 
 export function savePinnedTabs() {

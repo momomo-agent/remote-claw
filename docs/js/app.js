@@ -33,8 +33,15 @@ const App = defineComponent({
         return
       }
       if (appId === 'browser') {
-        const port = prompt('Enter port number:', '3000')
-        if (port) api.invoke('open-browser', { device: state.selectedDevice, port: parseInt(port), path: '/' })
+        state.promptModal = {
+          title: 'Enter port number',
+          placeholder: '3000',
+          defaultValue: '3000',
+          onSubmit: (val) => {
+            state.promptModal = null
+            if (val) api.invoke('open-browser', { device: state.selectedDevice, port: parseInt(val), path: '/' })
+          },
+        }
         return
       }
       if (appId === 'screen') {
@@ -231,6 +238,51 @@ const App = defineComponent({
         h('div', { class: 'content' }, [content]),
         // Context menu
         ctxMenuNode,
+        // Prompt modal
+        state.promptModal ? h('div', {
+          style: {
+            position: 'fixed', inset: '0', background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: '9999',
+          },
+          onClick: (e) => { if (e.target === e.currentTarget) { state.promptModal = null } },
+        }, [
+          h('div', {
+            style: {
+              background: '#1e1e20', borderRadius: '8px', padding: '16px',
+              width: '280px', border: '1px solid rgba(255,255,255,0.1)',
+            },
+          }, [
+            h('div', { style: { fontSize: '13px', color: '#e2e8f0', marginBottom: '10px' } }, state.promptModal.title),
+            h('input', {
+              type: 'text',
+              value: state.promptModal.defaultValue || '',
+              placeholder: state.promptModal.placeholder || '',
+              style: {
+                width: '100%', padding: '6px 10px', fontSize: '13px', boxSizing: 'border-box',
+                background: '#0a0a0b', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '4px',
+                color: '#e2e8f0', outline: 'none',
+              },
+              onVnodeMounted: (vnode) => { vnode.el.focus(); vnode.el.select() },
+              onKeydown: (e) => {
+                if (e.key === 'Enter') state.promptModal.onSubmit(e.target.value)
+                if (e.key === 'Escape') { state.promptModal = null }
+              },
+            }),
+            h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' } }, [
+              h('button', {
+                style: { padding: '4px 14px', fontSize: '12px', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '4px', color: '#a0a0a0', cursor: 'pointer' },
+                onClick: () => { state.promptModal = null },
+              }, 'Cancel'),
+              h('button', {
+                style: { padding: '4px 14px', fontSize: '12px', background: '#3b82f6', border: 'none', borderRadius: '4px', color: '#fff', cursor: 'pointer' },
+                onClick: (e) => {
+                  const input = e.target.closest('div').parentElement.querySelector('input')
+                  state.promptModal.onSubmit(input.value)
+                },
+              }, 'Open'),
+            ]),
+          ]),
+        ]) : null,
       ])
     }
   },
