@@ -1,5 +1,6 @@
 // RemoteClaw Main Logic — hot-updatable via GitHub
 // App is a pure UI client. Daemon handles all command execution.
+const LOGIC_VERSION = "1.0.9";
 
 const { app, nativeImage, ipcMain } = require("electron");
 const { menubar } = require("menubar");
@@ -276,7 +277,7 @@ function sendToRenderer(channel, data) {
 
 // ── IPC: Config ──
 
-ipcMain.handle("get-config", () => ({ ...config, httpBase, connected, raw: JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) }));
+ipcMain.handle("get-config", () => ({ ...config, httpBase, connected, version: LOGIC_VERSION, raw: JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) }));
 
 ipcMain.handle("save-config", async (_, newCfg) => {
   const existing = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
@@ -547,8 +548,21 @@ async function checkForUpdate() {
     const current = fs.existsSync(cachedPath) ? fs.readFileSync(cachedPath, "utf-8") : "";
     if (remote !== current) {
       fs.writeFileSync(stagingPath, remote);
-      const meta = { stagedAt: Date.now(), sha: require("crypto").createHash("sha256").update(remote).digest("hex").slice(0, 12) };
+      const vMatch = remote.match(/LOGIC_VERSION\s*=\s*["']([^"']+)["']/);
+      const newVer = vMatch ? vMatch[1] : "new";
+      const meta = { stagedAt: Date.now(), version: newVer, sha: require("crypto").createHash("sha256").update(remote).digest("hex").slice(0, 12) };
       fs.writeFileSync(path.join(CONFIG_DIR, "main-logic.meta.json"), JSON.stringify(meta));
+      console.log(`[ota] Update staged: v${LOGIC_VERSION} → v${newVer}`);
+      pendingUpdate = true;
+      // Update tray menu to show pending update
+      if (mb?.tray) {
+        trayMenu.items[0].label = `RemoteClaw v${LOGIC_VERSION} → v${newVer}`;
+      }
+      // Show notification
+      if (Notification.isSupported()) {
+        new Notification({ title: "RemoteClaw Updated", body: `v${newVer} ready — restart to apply` }).show();
+      }
+      sendToRenderer("update-available", { current: LOGIC_VERSION, next: newVer });
     }
   } catch {}
 }
@@ -605,9 +619,10 @@ mb.on("ready", () => {
     }
   } catch {}
 
-  const { Menu } = require("electron");
+  let pendingUpdate = false;
+  const { Menu, Notification } = require("electron");
   let trayMenu = Menu.buildFromTemplate([
-    { label: "RemoteClaw", enabled: false },
+    { label: `RemoteClaw v${LOGIC_VERSION}`, enabled: false },
     { type: "separator" },
     { label: "Pin Window", type: "checkbox", checked: false, click: (item) => {
       isPinned = item.checked;
