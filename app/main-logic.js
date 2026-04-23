@@ -82,7 +82,8 @@ function startDaemon() {
   if (!fs.existsSync(DAEMON_ENTRY) && !installDaemon()) return;
 
   console.log("[daemon] Starting...");
-  const child = spawn(process.execPath.includes("Electron") ? "node" : process.execPath, [DAEMON_ENTRY], {
+  const nodeCmd = process.versions.electron ? "node" : process.execPath;
+  const child = spawn(nodeCmd, [DAEMON_ENTRY], {
     detached: true,
     stdio: ["ignore", fs.openSync(path.join(CONFIG_DIR, "daemon.log"), "a"), fs.openSync(path.join(CONFIG_DIR, "daemon.log"), "a")],
     env: { ...process.env, HOME: os.homedir(), PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
