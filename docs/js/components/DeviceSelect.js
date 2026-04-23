@@ -23,18 +23,21 @@ export default defineComponent({
         ),
       ]
 
-      if (props.detached) {
-        return h('select', {
-          class: 'device-select',
-          style: 'margin-left:72px',
-          onChange,
-        }, options)
-      }
-
-      return h('select', {
+      const select = h('select', {
         class: 'device-select device-title',
         onChange,
       }, options)
+
+      // Both tray and detached windows get the same layout: dot + name
+      return h('div', {
+        style: { display: 'flex', alignItems: 'center', gap: '10px', marginLeft: props.detached ? '72px' : '0' },
+      }, [
+        h('div', {
+          class: ['status-indicator', state.connected ? 'on' : 'off'],
+          title: state.connected ? 'Connected' : 'Disconnected',
+        }),
+        select,
+      ])
     }
   },
 })

@@ -181,11 +181,6 @@ const App = defineComponent({
         // Titlebar
         h('div', { class: 'titlebar' }, [
           h('div', { class: 'titlebar-left' }, [
-            h('div', {
-              class: ['status-indicator', state.connected ? 'on' : 'off'],
-              title: state.connected ? 'Connected' : 'Disconnected',
-              onClick: () => api.toggleConnection(),
-            }),
             h(DeviceSelect, { detached: false, onChange: handleDeviceChange }),
             h('div', {
               class: ['daemon-badge', state.daemonRunning ? 'running' : 'stopped'],
