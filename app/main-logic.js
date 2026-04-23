@@ -590,6 +590,8 @@ ipcMain.handle("notify", (_, { title, body }) => { const { Notification } = requ
 // ── IPC: Shell utilities (Electron shell, not PTY) ──
 
 ipcMain.handle("shell-open-external", (_, { url }) => require("electron").shell.openExternal(url));
+ipcMain.handle("open-external", (_, { url }) => require("electron").shell.openExternal(url));
+ipcMain.handle("relaunch", () => { app.relaunch(); app.exit(0); });
 ipcMain.handle("shell-open-path", (_, { path: p }) => require("electron").shell.openPath(p));
 ipcMain.handle("shell-show-in-folder", (_, { path: p }) => { require("electron").shell.showItemInFolder(p); return { ok: true }; });
 ipcMain.handle("shell-trash", async (_, { path: p }) => { await require("electron").shell.trashItem(p); return { ok: true }; });
@@ -722,7 +724,12 @@ mb.on("ready", () => {
     return { ok: true };
   });
 
-  mb.on("show", () => { sendToRenderer("refresh", {}); if (!isPinned && mb.tray) trayBounds = mb.tray.getBounds(); });
+  mb.on("show", () => {
+    sendToRenderer("refresh", {});
+    if (!isPinned && mb.tray) trayBounds = mb.tray.getBounds();
+    // Check for updates on every tray show
+    checkForUpdate();
+  });
 });
 
 mb.on("after-create-window", () => {

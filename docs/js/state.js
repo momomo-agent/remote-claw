@@ -41,6 +41,7 @@ export const state = reactive({
   pinnedTabs: loadPinned(),
   daemonRunning: false,
   daemonInstalled: false,
+  updateAvailable: null, // { current, next, needsDmg }
 })
 
 export function savePinnedTabs() {

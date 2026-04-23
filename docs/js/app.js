@@ -95,6 +95,7 @@ const App = defineComponent({
     }
     function onShellData(msg) { getShellInstance().onShellData(msg) }
     function onShellExit(msg) { getShellInstance().onShellExit(msg) }
+    function onUpdateAvailable(data) { state.updateAvailable = data }
 
     onMounted(async () => {
       document.addEventListener('keydown', onKeydown)
@@ -106,6 +107,7 @@ const App = defineComponent({
       api.on('window-moved', onWindowMoved)
       api.on('shell-data', onShellData)
       api.on('shell-exit', onShellExit)
+      api.on('update-available', onUpdateAvailable)
 
       // Init
       const pinnedState = await api.getPinned()
@@ -193,6 +195,33 @@ const App = defineComponent({
               : []
           ),
         ]),
+        // Update banner
+        state.updateAvailable ? h('div', {
+          class: 'update-banner',
+          style: {
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '4px 12px', fontSize: '12px',
+            background: state.updateAvailable.needsDmg ? '#7c2d12' : '#1e3a5f',
+            color: '#e2e8f0', borderBottom: '1px solid rgba(255,255,255,0.06)',
+          },
+        }, [
+          h('span', {}, state.updateAvailable.needsDmg
+            ? `v${state.updateAvailable.next} requires new DMG`
+            : `v${state.updateAvailable.next} available`),
+          h('button', {
+            style: {
+              background: 'rgba(255,255,255,0.15)', border: 'none', color: '#e2e8f0',
+              padding: '2px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px',
+            },
+            onClick: () => {
+              if (state.updateAvailable.needsDmg) {
+                api.invoke('open-external', { url: 'https://github.com/momomo-agent/remote-claw/releases/latest' })
+              } else {
+                api.invoke('relaunch')
+              }
+            },
+          }, state.updateAvailable.needsDmg ? 'Download' : 'Restart'),
+        ]) : null,
         // Tab bar
         h(TabBar, {
           onSelect: handleTabSelect,
