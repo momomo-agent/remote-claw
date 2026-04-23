@@ -519,8 +519,8 @@ ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
   return { ok: true };
 });
 
-ipcMain.handle("open-code-server", async (_, { device, folder }) => {
-  const { BrowserWindow } = require("electron");
+ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
+  const { BrowserWindow, Notification } = require("electron");
   const { startCodeServerProxy } = require("./code-server-proxy");
 
   let server = "wss://remote.momomo.dev";
@@ -531,21 +531,26 @@ ipcMain.handle("open-code-server", async (_, { device, folder }) => {
     token = cfg.token || "";
   } catch {}
 
-  const proxy = await startCodeServerProxy({ server, token, device, remotePort: 8080 });
-  const codeUrl = proxy.url + (folder ? `/?folder=${encodeURIComponent(folder)}` : "");
+  try {
+    const proxy = await startCodeServerProxy({ server, token, device, remotePort: port || 8080 });
+    const codeUrl = proxy.url + (folder ? `/?folder=${encodeURIComponent(folder)}` : "");
 
-  const win = new BrowserWindow({
-    width: 1280, height: 800, minWidth: 800, minHeight: 600,
-    title: "VS Code \u2014 " + (device || "local"),
-    backgroundColor: '#161618',
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 12, y: 12 },
-    webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
-  });
-  win.loadURL(codeUrl);
-  win.on("closed", () => proxy.close());
-  trackIndependentWindow(win);
-  return { ok: true };
+    const win = new BrowserWindow({
+      width: 1280, height: 800, minWidth: 800, minHeight: 600,
+      title: "VS Code \u2014 " + (device || "local"),
+      backgroundColor: '#161618',
+      titleBarStyle: "hiddenInset",
+      trafficLightPosition: { x: 12, y: 12 },
+      webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
+    });
+    win.loadURL(codeUrl);
+    win.on("closed", () => proxy.close());
+    trackIndependentWindow(win);
+    return { ok: true };
+  } catch (e) {
+    new Notification({ title: "VS Code", body: `Failed to connect: ${e.message}` }).show();
+    return { error: e.message };
+  }
 });
 
 ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {

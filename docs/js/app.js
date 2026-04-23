@@ -29,7 +29,21 @@ const App = defineComponent({
 
       // Special handlers
       if (appId === 'vscode') {
-        api.invoke('open-code-server', { device: state.selectedDevice })
+        state.promptModal = {
+          title: 'code-server port (default 8080)',
+          placeholder: '8080',
+          defaultValue: '8080',
+          onSubmit: async (val) => {
+            state.promptModal = null
+            if (val) {
+              const result = await api.invoke('open-code-server', { device: state.selectedDevice, port: parseInt(val) })
+              if (result?.error) {
+                // Show error in a simple way
+                alert('VS Code: ' + result.error)
+              }
+            }
+          },
+        }
         return
       }
       if (appId === 'browser') {
