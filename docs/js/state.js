@@ -24,7 +24,13 @@ export const ALL_APPS = [
 const DEFAULT_PINNED = ['devices', 'shell', 'files', 'apps']
 
 function loadPinned() {
-  try { return JSON.parse(localStorage.getItem('rc-pinned-tabs')) || DEFAULT_PINNED }
+  try {
+    const saved = JSON.parse(localStorage.getItem('rc-pinned-tabs'))
+    if (!saved) return DEFAULT_PINNED
+    // Auto-restore apps if missing (was accidentally removed)
+    if (!saved.includes('apps')) saved.push('apps')
+    return saved
+  }
   catch { return DEFAULT_PINNED }
 }
 
