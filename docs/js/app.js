@@ -112,6 +112,11 @@ const App = defineComponent({
       state.pinned = pinnedState?.pinned || false
       await refreshData()
 
+      // First run: if token not configured, go to settings
+      if (!state.configRaw?.token || state.configRaw.token === 'CHANGE_ME') {
+        state.currentApp = 'settings'
+      }
+
       // Periodic refresh
       refreshInterval = setInterval(async () => {
         await refreshData()

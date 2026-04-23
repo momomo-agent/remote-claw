@@ -301,6 +301,16 @@ body {
 .settings-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 .settings-input::placeholder { color: var(--text-tertiary); }
 .settings-note { font-size: 10px; color: var(--text-tertiary); margin-top: -10px; margin-bottom: 14px; }
+.settings-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border-radius: var(--radius); margin-bottom: 16px;
+}
+.settings-banner.setup { background: rgba(0,122,255,0.1); }
+.settings-banner.error { background: rgba(255,69,58,0.1); }
+.settings-banner.ok { background: rgba(52,199,89,0.1); }
+.settings-banner-icon { font-size: 20px; flex-shrink: 0; }
+.settings-banner-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.settings-banner-text { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
 .settings-save {
   width: 100%; background: var(--accent); color: #fff; border: none;
   padding: 10px; border-radius: var(--radius-xs); font-size: 13px;
@@ -309,7 +319,7 @@ body {
 }
 .settings-save:hover { filter: brightness(1.1); }
 .settings-save:active { transform: scale(0.98); }
-.settings-saved { color: var(--green); font-size: 11px; text-align: center; margin-top: 8px; display: none; }
+.settings-saved { color: var(--green); font-size: 11px; text-align: center; margin-top: 8px; }
 
 /* ── Empty state ── */
 .empty {
