@@ -1,6 +1,11 @@
 // RemoteClaw Bootstrap — never needs updating
-// Fetches latest main-logic.js from GitHub, falls back to bundled version
-// Update strategy: bundled always works, cached only used if validated
+// Update strategy: start with known-good, stage updates, promote on successful boot
+//
+// Files in ~/.remoteclaw/:
+//   main-logic.js        — last known-good (promoted from staging after successful boot)
+//   main-logic.staging.js — freshly downloaded, not yet verified
+//   main-logic.meta.json — { hash, version, updatedAt, bootedOk }
+//   boot.lock            — crash detection marker
 
 const { app, ipcMain } = require("electron");
 const fs = require("fs");
@@ -15,7 +20,29 @@ const LOGIC_URLS = [
 const LOCAL_LOGIC = path.join(__dirname, "main-logic.js");
 const CACHE_DIR = path.join(require("os").homedir(), ".remoteclaw");
 const CACHED_LOGIC = path.join(CACHE_DIR, "main-logic.js");
-const CACHED_META = path.join(CACHE_DIR, "main-logic.meta.json");
+const STAGING_LOGIC = path.join(CACHE_DIR, "main-logic.staging.js");
+const META_PATH = path.join(CACHE_DIR, "main-logic.meta.json");
+const BOOT_LOCK = path.join(CACHE_DIR, "boot.lock");
+
+// ── Helpers ──
+
+function sha256(str) { return crypto.createHash("sha256").update(str).digest("hex"); }
+
+function readMeta() {
+  try { return JSON.parse(fs.readFileSync(META_PATH, "utf-8")); } catch { return {}; }
+}
+
+function writeMeta(obj) {
+  const meta = { ...readMeta(), ...obj };
+  fs.writeFileSync(META_PATH, JSON.stringify(meta, null, 2));
+}
+
+function isValidLogic(code) {
+  if (!code || code.length < 500) return false;
+  if (code.startsWith("<") || code.startsWith("<!DOCTYPE")) return false;
+  if (!code.includes("connectDaemon") || !code.includes("ipcMain")) return false;
+  return true;
+}
 
 function fetchText(url, timeout = 8000) {
   return new Promise((resolve, reject) => {
@@ -33,53 +60,56 @@ function fetchText(url, timeout = 8000) {
   });
 }
 
-function isValidLogic(code) {
-  // Must be JS, not HTML error page or truncated
-  if (!code || code.length < 500) return false;
-  if (code.startsWith("<") || code.startsWith("<!DOCTYPE")) return false;
-  if (!code.includes("connectDaemon") || !code.includes("ipcMain")) return false;
-  return true;
-}
-
-function sha256(str) { return crypto.createHash("sha256").update(str).digest("hex"); }
-
 async function fetchLatest() {
   for (const url of LOGIC_URLS) {
     try {
       const code = await fetchText(url);
       if (isValidLogic(code)) return code;
-      console.log(`[bootstrap] Invalid content from ${url}, trying next...`);
+      console.log(`[bootstrap] Invalid content from ${url}, skipping`);
     } catch (e) {
-      console.log(`[bootstrap] ${url} failed: ${e.message}`);
+      console.log(`[bootstrap] ${url}: ${e.message}`);
     }
   }
   return null;
 }
 
+// ── Boot Logic ──
+
 async function loadLogic() {
   if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
 
-  // Try fetch latest from GitHub (non-blocking for startup)
-  try {
-    const code = await fetchLatest();
-    if (code) {
-      const hash = sha256(code);
-      // Only write if different from cached
-      let cachedHash = "";
-      try { cachedHash = JSON.parse(fs.readFileSync(CACHED_META, "utf-8")).hash; } catch {}
-      if (hash !== cachedHash) {
-        fs.writeFileSync(CACHED_LOGIC, code);
-        fs.writeFileSync(CACHED_META, JSON.stringify({ hash, updatedAt: new Date().toISOString(), size: code.length }));
-        console.log(`[bootstrap] Updated main-logic.js (${code.length} bytes)`);
-      } else {
-        console.log("[bootstrap] main-logic.js is up to date");
-      }
-    }
-  } catch (e) {
-    console.log("[bootstrap] Update check failed:", e.message);
+  // Step 1: Crash detection — did last boot fail?
+  const lastBootCrashed = fs.existsSync(BOOT_LOCK);
+  if (lastBootCrashed) {
+    console.log("[bootstrap] Last boot crashed — rolling back to bundled");
+    // Remove staging and cached to force bundled
+    try { fs.unlinkSync(STAGING_LOGIC); } catch {}
+    try { fs.unlinkSync(CACHED_LOGIC); } catch {}
+    writeMeta({ lastCrash: new Date().toISOString(), bootedOk: false });
   }
 
-  // Priority: validated cached > bundled
+  // Step 2: Try promote staging → cached (if staging exists and cached is different)
+  if (fs.existsSync(STAGING_LOGIC) && !lastBootCrashed) {
+    try {
+      const staging = fs.readFileSync(STAGING_LOGIC, "utf-8");
+      if (isValidLogic(staging)) {
+        const stagingHash = sha256(staging);
+        const meta = readMeta();
+        if (stagingHash !== meta.cachedHash) {
+          fs.writeFileSync(CACHED_LOGIC, staging);
+          writeMeta({ cachedHash: stagingHash, promotedAt: new Date().toISOString() });
+          console.log("[bootstrap] Promoted staging → cached");
+        }
+      } else {
+        console.log("[bootstrap] Staging invalid, discarding");
+      }
+      fs.unlinkSync(STAGING_LOGIC);
+    } catch (e) {
+      console.log("[bootstrap] Staging promote failed:", e.message);
+    }
+  }
+
+  // Step 3: Pick which logic to load — cached (validated) > bundled
   let logicPath = LOCAL_LOGIC;
   if (fs.existsSync(CACHED_LOGIC)) {
     try {
@@ -87,14 +117,18 @@ async function loadLogic() {
       if (isValidLogic(cached)) {
         logicPath = CACHED_LOGIC;
       } else {
-        console.log("[bootstrap] Cached logic invalid, removing");
+        console.log("[bootstrap] Cached invalid, falling back to bundled");
         fs.unlinkSync(CACHED_LOGIC);
       }
     } catch {}
   }
+
+  // Step 4: Write boot lock (cleared after successful init)
+  fs.writeFileSync(BOOT_LOCK, String(Date.now()));
+
   console.log("[bootstrap] Loading:", logicPath);
 
-  // Ensure cached logic can find node_modules from app directory
+  // Module resolution for cached logic
   if (logicPath !== LOCAL_LOGIC) {
     const Module = require("module");
     const appNodeModules = path.join(__dirname, "node_modules");
@@ -102,7 +136,6 @@ async function loadLogic() {
     Module._resolveFilename = function(request, parent, ...args) {
       try { return origResolve.call(this, request, parent, ...args); }
       catch (e) {
-        // Retry with app's node_modules
         const altPath = path.join(appNodeModules, request);
         if (fs.existsSync(altPath) || fs.existsSync(altPath + '.js') || fs.existsSync(path.join(altPath, 'index.js'))) {
           return origResolve.call(this, altPath, parent, ...args);
@@ -112,31 +145,62 @@ async function loadLogic() {
     };
   }
 
+  // Load logic
   require(logicPath);
+
+  // Step 5: Boot succeeded — clear lock, mark ok
+  setTimeout(() => {
+    try { fs.unlinkSync(BOOT_LOCK); } catch {}
+    writeMeta({ bootedOk: true, lastBoot: new Date().toISOString(), loadedFrom: logicPath });
+    console.log("[bootstrap] Boot OK, lock cleared");
+
+    // Step 6: Background fetch — stage for next restart
+    fetchLatest().then(code => {
+      if (!code) return;
+      const hash = sha256(code);
+      const meta = readMeta();
+      if (hash !== meta.cachedHash) {
+        fs.writeFileSync(STAGING_LOGIC, code);
+        writeMeta({ stagedHash: hash, stagedAt: new Date().toISOString(), stagedSize: code.length });
+        console.log(`[bootstrap] Staged update (${code.length} bytes) — will apply on next restart`);
+      }
+    }).catch(() => {});
+  }, 5000); // 5s grace period — if it crashes within 5s, lock stays
 }
 
-// Restart handler — available before logic loads
+// ── IPC ──
+
 ipcMain.handle("restart", () => {
   app.relaunch();
   app.exit(0);
 });
 
-// Self-update: fetch latest logic + restart
 ipcMain.handle("self-update", async () => {
   try {
     const code = await fetchLatest();
-    if (code) {
-      if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-      fs.writeFileSync(CACHED_LOGIC, code);
-      fs.writeFileSync(CACHED_META, JSON.stringify({ hash: sha256(code), updatedAt: new Date().toISOString(), size: code.length }));
-      app.relaunch();
-      app.exit(0);
-      return { ok: true };
-    }
-    return { error: "no valid source available" };
+    if (!code) return { error: "no valid source available" };
+    // Write to staging, then promote immediately (user-initiated = trusted)
+    fs.writeFileSync(STAGING_LOGIC, code);
+    writeMeta({ stagedHash: sha256(code), stagedAt: new Date().toISOString() });
+    app.relaunch();
+    app.exit(0);
+    return { ok: true };
   } catch (e) {
     return { error: e.message };
   }
+});
+
+ipcMain.handle("update-info", () => {
+  const meta = readMeta();
+  return {
+    bootedOk: meta.bootedOk,
+    loadedFrom: meta.loadedFrom || LOCAL_LOGIC,
+    cachedHash: meta.cachedHash,
+    stagedHash: meta.stagedHash,
+    lastBoot: meta.lastBoot,
+    lastCrash: meta.lastCrash,
+    hasPendingUpdate: fs.existsSync(STAGING_LOGIC),
+  };
 });
 
 app.whenReady().then(loadLogic);
