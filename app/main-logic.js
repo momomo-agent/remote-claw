@@ -1,6 +1,6 @@
 // RemoteClaw Main Logic — hot-updatable via GitHub
 // App is a pure UI client. Daemon handles all command execution.
-const LOGIC_VERSION = "1.0.9";
+const LOGIC_VERSION = "1.1.0";
 
 const { app, nativeImage, ipcMain } = require("electron");
 const { menubar } = require("menubar");
@@ -219,14 +219,49 @@ function getSystemProxy() {
 
 function createProxyAgent(proxyUrl) {
   if (!proxyUrl) return undefined;
+  if (proxyUrl.startsWith('socks')) return undefined;
   try {
-    if (proxyUrl.startsWith('socks')) {
-      // socks not supported by https-proxy-agent, skip
-      return undefined;
-    }
+    // Try https-proxy-agent first (available in dev, not in packaged app)
     const { HttpsProxyAgent } = require('https-proxy-agent');
     return new HttpsProxyAgent(proxyUrl);
-  } catch { return undefined; }
+  } catch {
+    // Fallback: build a CONNECT-tunnel agent using only Node builtins
+    const http = require('http');
+    const { URL } = require('url');
+    const proxy = new URL(proxyUrl);
+    return {
+      __isBuiltinProxy: true,
+      proxyHost: proxy.hostname,
+      proxyPort: parseInt(proxy.port) || 7890,
+    };
+  }
+}
+
+// Connect WebSocket through HTTP CONNECT tunnel (no external deps)
+function connectWsThroughProxy(wsUrl, proxyInfo) {
+  return new Promise((resolve, reject) => {
+    const http = require('http');
+    const target = new URL(wsUrl);
+    const connectReq = http.request({
+      host: proxyInfo.proxyHost,
+      port: proxyInfo.proxyPort,
+      method: 'CONNECT',
+      path: `${target.hostname}:${target.port || 443}`,
+    });
+    connectReq.on('connect', (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        return reject(new Error(`Proxy CONNECT failed: ${res.statusCode}`));
+      }
+      // Create TLS connection over the tunnel
+      const tls = require('tls');
+      const tlsSocket = tls.connect({ socket, servername: target.hostname, rejectUnauthorized: true });
+      const ws = new WebSocket(wsUrl, { createConnection: () => tlsSocket });
+      resolve(ws);
+    });
+    connectReq.on('error', reject);
+    connectReq.end();
+  });
 }
 
 
@@ -237,33 +272,42 @@ function connectClient() {
   const url = `${config.server}/ws?device=${encodeURIComponent(clientId)}&token=${encodeURIComponent(config.token)}&role=client`;
   const proxyUrl = getSystemProxy();
   const agent = createProxyAgent(proxyUrl);
-  const wsOpts = agent ? { agent } : {};
-  clientWs = new WebSocket(url, wsOpts);
 
-  clientWs.on("open", () => {
-    connected = true;
-    if (mb?.tray) mb.tray.setImage(createTrayIcon(true));
-    sendToRenderer("daemon-status", { connected: true });
-  });
+  const setupWs = (ws) => {
+    clientWs = ws;
+    ws.on("open", () => {
+      connected = true;
+      console.log("[ws] Connected" + (proxyUrl ? ` via proxy ${proxyUrl}` : ""));
+      if (mb?.tray) mb.tray.setImage(createTrayIcon(true));
+      sendToRenderer("daemon-status", { connected: true });
+    });
+    ws.on("message", (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === "shell-data" || msg.type === "shell-exit") {
+          sendToRenderer(msg.type, msg);
+        }
+      } catch {}
+    });
+    ws.on("close", () => {
+      connected = false;
+      if (mb?.tray) mb.tray.setImage(createTrayIcon(false));
+      sendToRenderer("daemon-status", { connected: false });
+      if (!manualDisconnect) setTimeout(connectClient, 3000);
+    });
+    ws.on("error", (e) => { console.log("[ws] Error:", e.message); });
+  };
 
-  clientWs.on("message", (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      // Forward shell events to renderer (PTY data comes from daemon via server)
-      if (msg.type === "shell-data" || msg.type === "shell-exit") {
-        sendToRenderer(msg.type, msg);
-      }
-    } catch {}
-  });
-
-  clientWs.on("close", () => {
-    connected = false;
-    if (mb?.tray) mb.tray.setImage(createTrayIcon(false));
-    sendToRenderer("daemon-status", { connected: false });
-    if (!manualDisconnect) setTimeout(connectClient, 3000);
-  });
-
-  clientWs.on("error", () => {});
+  if (agent && agent.__isBuiltinProxy) {
+    // Use CONNECT tunnel with Node builtins (no external deps needed)
+    connectWsThroughProxy(url, agent).then(setupWs).catch((e) => {
+      console.log("[ws] Proxy tunnel failed:", e.message, "— trying direct");
+      setupWs(new WebSocket(url));
+    });
+  } else {
+    const wsOpts = agent ? { agent } : {};
+    setupWs(new WebSocket(url, wsOpts));
+  }
 }
 
 function sendToRenderer(channel, data) {
