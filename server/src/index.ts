@@ -398,6 +398,15 @@ export class DeviceHub {
             target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
           }
         }
+
+        // HTTP/WS proxy relay — forward between app and device
+        if (msg.type === "http-proxy-request" || msg.type === "http-proxy-response" ||
+            msg.type === "ws-proxy-open" || msg.type === "ws-proxy-data" || msg.type === "ws-proxy-close") {
+          const target = this.devices.get(msg.to);
+          if (target) {
+            target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
+          }
+        }
       } catch {}
     });
 

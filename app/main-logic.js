@@ -327,33 +327,28 @@ ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
 
 ipcMain.handle("open-code-server", async (_, { device, folder }) => {
   const { BrowserWindow } = require("electron");
-  // Try to resolve device IP via exec
-  let host = "127.0.0.1";
+  const { startCodeServerProxy } = require("./code-server-proxy");
+
+  let server = "wss://remote.momomo.dev";
+  let token = "";
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".remoteclaw", "config.json"), "utf-8"));
-    const httpBase = cfg.httpBase || cfg.server?.replace('wss://', 'https://').replace('ws://', 'http://');
-    const token = cfg.token;
-    if (device && httpBase) {
-      const fetch = require("electron").net.fetch || globalThis.fetch;
-      const res = await fetch(`${httpBase}/exec`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device, command: 'ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname -I 2>/dev/null | awk "{print \\$1}"', oneshot: true, timeout: 5000 }),
-      });
-      const data = await res.json();
-      const ip = (data.stdout || '').trim().split(/\s+/)[0];
-      if (ip && /^[\d.]+$/.test(ip)) host = ip;
-    }
-  } catch (e) { /* fallback to localhost */ }
-  const codeUrl = `http://${host}:8080` + (folder ? `/?folder=${encodeURIComponent(folder)}` : '');
+    server = cfg.server || server;
+    token = cfg.token || "";
+  } catch {}
+
+  const proxy = await startCodeServerProxy({ server, token, device, remotePort: 8080 });
+  const codeUrl = proxy.url + (folder ? `/?folder=${encodeURIComponent(folder)}` : "");
+
   const win = new BrowserWindow({
     width: 1280, height: 800, minWidth: 800, minHeight: 600,
-    title: "VS Code — " + (device || "local"),
+    title: "VS Code " + String.fromCharCode(0x2014) + " " + (device || "local"),
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
   });
   win.loadURL(codeUrl);
+  win.on("closed", () => proxy.close());
   trackIndependentWindow(win);
   return { ok: true };
 });

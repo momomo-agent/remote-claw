@@ -80,6 +80,11 @@ function connect() {
       if (msg.type === "screen-start") handleScreenStart(msg);
       if (msg.type === "screen-stop") handleScreenStop(msg);
       if (msg.type === "screen-input") handleScreenInput(msg);
+      // HTTP proxy (code-server tunnel)
+      if (msg.type === "http-proxy-request") handleHttpProxyRequest(msg);
+      if (msg.type === "ws-proxy-open") handleWsProxyOpen(msg);
+      if (msg.type === "ws-proxy-data") handleWsProxyData(msg);
+      if (msg.type === "ws-proxy-close") handleWsProxyClose(msg);
     } catch (e) {
       console.error("Bad message:", e.message);
     }
@@ -381,6 +386,126 @@ function mapKey(jsKey) {
     F7: "f7", F8: "f8", F9: "f9", F10: "f10", F11: "f11", F12: "f12",
   };
   return { key: keyMap[jsKey] || jsKey.toLowerCase() };
+}
+
+// ── HTTP Proxy (code-server tunnel) ──
+
+const http = require("http");
+const proxyWsSessions = new Map(); // reqId -> WebSocket to local code-server
+
+function handleHttpProxyRequest(msg) {
+  const { reqId, method, url, headers, body, port, from } = msg;
+  const targetPort = port || 8080;
+
+  const reqOpts = {
+    hostname: "127.0.0.1",
+    port: targetPort,
+    path: url,
+    method: method || "GET",
+    headers: { ...headers },
+  };
+  // Remove hop-by-hop and proxy headers
+  delete reqOpts.headers["host"];
+  delete reqOpts.headers["connection"];
+  delete reqOpts.headers["upgrade"];
+  reqOpts.headers["host"] = `127.0.0.1:${targetPort}`;
+
+  const proxyReq = http.request(reqOpts, (proxyRes) => {
+    const chunks = [];
+    proxyRes.on("data", (c) => chunks.push(c));
+    proxyRes.on("end", () => {
+      const respBody = Buffer.concat(chunks);
+      const respHeaders = { ...proxyRes.headers };
+      delete respHeaders["transfer-encoding"];
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "http-proxy-response",
+          to: from,
+          reqId,
+          status: proxyRes.statusCode,
+          headers: respHeaders,
+          body: respBody.length > 0 ? respBody.toString("base64") : undefined,
+        }));
+      }
+    });
+  });
+
+  proxyReq.on("error", (e) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "http-proxy-response",
+        to: from,
+        reqId,
+        error: e.message,
+      }));
+    }
+  });
+
+  if (body) proxyReq.write(Buffer.from(body, "base64"));
+  proxyReq.end();
+}
+
+function handleWsProxyOpen(msg) {
+  const { reqId, url, headers, port, from } = msg;
+  const targetPort = port || 8080;
+  const wsUrl = `ws://127.0.0.1:${targetPort}${url}`;
+
+  const proxyHeaders = {};
+  // Forward relevant headers
+  for (const [k, v] of Object.entries(headers || {})) {
+    if (!["host", "upgrade", "connection", "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions"].includes(k.toLowerCase())) {
+      proxyHeaders[k] = v;
+    }
+  }
+
+  const localWs = new WebSocket(wsUrl, { headers: proxyHeaders });
+
+  localWs.on("open", () => {
+    proxyWsSessions.set(reqId, localWs);
+  });
+
+  localWs.on("message", (data, isBinary) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "ws-proxy-data",
+        to: from,
+        reqId,
+        data: isBinary ? Buffer.from(data).toString("base64") : data.toString(),
+        binary: isBinary,
+      }));
+    }
+  });
+
+  localWs.on("close", (code) => {
+    proxyWsSessions.delete(reqId);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "ws-proxy-close", to: from, reqId, code }));
+    }
+  });
+
+  localWs.on("error", (e) => {
+    console.error(`[ws-proxy] ${reqId}: ${e.message}`);
+    proxyWsSessions.delete(reqId);
+  });
+}
+
+function handleWsProxyData(msg) {
+  const localWs = proxyWsSessions.get(msg.reqId);
+  if (localWs && localWs.readyState === WebSocket.OPEN) {
+    if (msg.binary) {
+      localWs.send(Buffer.from(msg.data, "base64"));
+    } else {
+      localWs.send(msg.data);
+    }
+  }
+}
+
+function handleWsProxyClose(msg) {
+  const localWs = proxyWsSessions.get(msg.reqId);
+  if (localWs) {
+    localWs.close();
+    proxyWsSessions.delete(msg.reqId);
+  }
 }
 
 // ── Keepalive ──
