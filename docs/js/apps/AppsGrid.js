@@ -11,7 +11,7 @@ export default defineComponent({
     function onAppContext({ app, x, y }) {
       const isPinned = state.pinnedTabs.includes(app.id)
       const items = []
-      if (isPinned) {
+      if (isPinned && !app.permanent) {
         items.push({
           label: 'Unpin from tab bar',
           action: () => {

@@ -17,8 +17,8 @@ export const ALL_APPS = [
   { id: 'screen',   label: 'Screen',   icon: '🖥', canDetach: true,  needsDevice: true },
   { id: 'devices',  label: 'Devices',  icon: '📡', canDetach: false, needsDevice: false },
   { id: 'history',  label: 'History',  icon: '📋', canDetach: false, needsDevice: false },
-  { id: 'apps',     label: 'Apps',     icon: '⊞',  canDetach: false, needsDevice: false },
-  { id: 'settings', label: 'Settings', icon: '⚙',  canDetach: false, needsDevice: false },
+  { id: 'apps',     label: 'Apps',     icon: '⊞',  canDetach: false, needsDevice: false, permanent: true },
+  { id: 'settings', label: 'Settings', icon: '⚙',  canDetach: false, needsDevice: false, permanent: true },
 ]
 
 const DEFAULT_PINNED = ['devices', 'shell', 'files', 'apps']
@@ -27,8 +27,10 @@ function loadPinned() {
   try {
     const saved = JSON.parse(localStorage.getItem('rc-pinned-tabs'))
     if (!saved) return DEFAULT_PINNED
-    // Auto-restore apps if missing (was accidentally removed)
-    if (!saved.includes('apps')) saved.push('apps')
+    // Ensure permanent tabs are always present
+    for (const app of ALL_APPS) {
+      if (app.permanent && !saved.includes(app.id)) saved.push(app.id)
+    }
     return saved
   }
   catch { return DEFAULT_PINNED }

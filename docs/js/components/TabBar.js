@@ -32,6 +32,7 @@ export default defineComponent({
       e.preventDefault()
       if (id === 'apps' || id === 'settings') return
       const app = ALL_APPS.find(a => a.id === id)
+      if (app?.permanent) return
       const items = [
         {
           label: 'Unpin from tab bar',
