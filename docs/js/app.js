@@ -8,7 +8,6 @@ import ContextMenu from './components/ContextMenu.js'
 import ShellApp, { getShellInstance } from './apps/ShellApp.js'
 import { getFilesInstance } from './apps/FilesApp.js'
 import FilesApp from './apps/FilesApp.js'
-import TerminalApp from './apps/TerminalApp.js'
 import AppsGrid from './apps/AppsGrid.js'
 import DevicesApp from './apps/DevicesApp.js'
 import HistoryApp from './apps/HistoryApp.js'
@@ -130,7 +129,6 @@ const App = defineComponent({
       const appMap = {
         shell: ShellApp,
         files: FilesApp,
-        terminal: TerminalApp,
         apps: AppsGrid,
         devices: DevicesApp,
         history: HistoryApp,
