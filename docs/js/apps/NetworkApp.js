@@ -110,8 +110,12 @@ export default defineComponent({
       
       const { port, secret } = await getClashConfig()
       const authHeader = secret ? `'Authorization': 'Bearer ${secret}'` : ''
-      // Run batch delay test via node on remote device
-      const script = `node -e "const http=require('http');const nodes=${JSON.stringify(group.all.map(n=>n.name))};const results={};let done=0;nodes.forEach(n=>{const url='http://127.0.0.1:${port}/proxies/'+encodeURIComponent(n)+'/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=3000';const req=http.get(url,{headers:{${authHeader}}},res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>{try{results[n]=JSON.parse(d).delay||0}catch{results[n]=0}if(++done===nodes.length)console.log(JSON.stringify(results))})});req.on('error',()=>{results[n]=0;if(++done===nodes.length)console.log(JSON.stringify(results))});req.setTimeout(4000,()=>{req.destroy();results[n]=0;if(++done===nodes.length)console.log(JSON.stringify(results))})})"`
+      // Write node list to temp file, then run node script that reads it
+      const nodesJson = JSON.stringify(group.all.map(n => n.name))
+      const writeCmd = `printf '%s' '${nodesJson.replace(/'/g, "'\\''")}' > /tmp/rc-nodes.json`
+      await execOnDevice(writeCmd, 5000)
+      const script = `node -e "const http=require('http');const nodes=JSON.parse(require('fs').readFileSync('/tmp/rc-nodes.json','utf8'));const results={};let done=0;nodes.forEach(n=>{const url='http://127.0.0.1:${port}/proxies/'+encodeURIComponent(n)+'/delay?url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=3000';const req=http.get(url,{headers:{${authHeader}}},res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>{try{results[n]=JSON.parse(d).delay||0}catch{results[n]=0}if(++done===nodes.length)console.log(JSON.stringify(results))})});req.on('error',()=>{results[n]=0;if(++done===nodes.length)console.log(JSON.stringify(results))});req.setTimeout(4000,()=>{req.destroy();results[n]=0;if(++done===nodes.length)console.log(JSON.stringify(results))})})"
+`
       const raw = await execOnDevice(script, 60000)
       if (raw) {
         try {
