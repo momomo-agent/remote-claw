@@ -336,6 +336,45 @@ body {
 .card-row:nth-child(3) { animation-delay: 60ms; }
 .card-row:nth-child(4) { animation-delay: 90ms; }
 .card-row:nth-child(5) { animation-delay: 120ms; }
+
+/* ── Apps Grid ── */
+.apps-grid-section { margin-bottom: 4px; }
+.apps-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+  padding: 0 12px 8px;
+}
+.app-card {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 14px 8px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-raised); cursor: pointer;
+  transition: all 0.15s ease; position: relative;
+  -webkit-app-region: no-drag;
+}
+.app-card:hover { background: var(--bg-hover); }
+.app-card:active { transform: scale(0.96); }
+.app-card.disabled { opacity: 0.3; pointer-events: none; }
+.app-icon { font-size: 22px; line-height: 1; }
+.app-label { font-size: 10px; font-weight: 500; color: var(--text-secondary); letter-spacing: 0.01em; }
+.app-pinned {
+  position: absolute; top: 4px; right: 6px;
+  font-size: 8px; color: var(--accent); line-height: 1;
+}
+
+/* ── Context Menu ── */
+.ctx-menu {
+  position: fixed; z-index: 1000;
+  background: var(--bg-surface); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs); padding: 4px 0;
+  box-shadow: var(--shadow-md); min-width: 160px;
+  animation: fadeIn 0.12s ease-out;
+  -webkit-app-region: no-drag;
+}
+.ctx-item {
+  padding: 7px 14px; font-size: 12px; font-weight: 500;
+  color: var(--text-primary); cursor: pointer;
+  transition: background 0.1s;
+}
+.ctx-item:hover { background: var(--bg-hover); }
 </style>
 </head>
 <body>

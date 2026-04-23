@@ -7,6 +7,28 @@ const isDetached = urlParams.get('detached') === '1';
 const detachedTab = urlParams.get('tab');
 const detachedDevice = urlParams.get('device');
 
+// ── App Registry ──
+const ALL_APPS = [
+  { id: 'shell',    label: 'Shell',    icon: '⌨',  canDetach: true,  canPin: true, needsDevice: true },
+  { id: 'files',    label: 'Files',    icon: '📁', canDetach: true,  canPin: true, needsDevice: true },
+  { id: 'terminal', label: 'Terminal', icon: '▶',  canDetach: true,  canPin: true, needsDevice: true },
+  { id: 'vscode',   label: 'VS Code',  icon: '💻', canDetach: 'only', canPin: true, needsDevice: true },
+  { id: 'browser',  label: 'Browser',  icon: '🌐', canDetach: 'only', canPin: true, needsDevice: true },
+  { id: 'screen',   label: 'Screen',   icon: '🖥', canDetach: 'only', canPin: true, needsDevice: true },
+  { id: 'devices',  label: 'Devices',  icon: '📡', canDetach: false, canPin: true, needsDevice: false },
+  { id: 'history',  label: 'History',  icon: '📋', canDetach: false, canPin: true, needsDevice: false },
+  { id: 'apps',     label: 'Apps',     icon: '⊞',  canDetach: false, canPin: true, needsDevice: false },
+  { id: 'settings', label: '⚙',       icon: '⚙',  canDetach: false, canPin: true, needsDevice: false },
+];
+
+const DEFAULT_PINNED = ['shell', 'files', 'apps', 'devices', 'settings'];
+
+function loadPinnedTabs() {
+  try { return JSON.parse(localStorage.getItem('rc-pinned-tabs')) || DEFAULT_PINNED; }
+  catch { return DEFAULT_PINNED; }
+}
+function savePinnedTabs(tabs) { localStorage.setItem('rc-pinned-tabs', JSON.stringify(tabs)); }
+
 let state = {
   tab: detachedTab || "shell",
   connected: false,
@@ -20,6 +42,7 @@ let state = {
   terminalInput: "",
   configRaw: null,
   pinned: false,
+  pinnedTabs: loadPinnedTabs(),
   shellSessionId: null,
   shellStatus: "closed",
   // Files
@@ -93,9 +116,10 @@ function render() {
         </div>
       </div>
       <div class="tabbar">
-        ${['shell','files','apps','devices','history','settings'].map(t => {
-          const label = t === 'settings' ? '⚙' : t.charAt(0).toUpperCase() + t.slice(1);
-          return `<div class="tabbar-item ${state.tab === t ? 'active' : ''}" data-tab="${t}">${label}</div>`;
+        ${state.pinnedTabs.map(id => {
+          const app = ALL_APPS.find(a => a.id === id);
+          if (!app) return '';
+          return `<div class="tabbar-item ${state.tab === id ? 'active' : ''}" data-tab="${id}">${app.label}</div>`;
         }).join('')}
       </div>
       <div class="content" id="content-area">${content}</div>
@@ -386,34 +410,33 @@ function parseLsLine(line) {
 // ── Apps ──
 
 function renderApps() {
-  if (!state.selectedDevice) {
-    return `<div class="empty"><div class="empty-icon">📦</div><div class="empty-text">Select a device to see apps</div></div>`;
+  const deviceApps = ALL_APPS.filter(a => a.needsDevice && a.id !== 'apps' && a.id !== 'settings');
+  const systemApps = ALL_APPS.filter(a => !a.needsDevice && a.id !== 'apps' && a.id !== 'settings');
+
+  function appCard(app) {
+    const isPinned = state.pinnedTabs.includes(app.id);
+    const disabled = app.needsDevice && !state.selectedDevice;
+    return `
+      <div class="app-card ${disabled ? 'disabled' : ''}" data-app="${app.id}" data-detach-only="${app.canDetach === 'only'}">
+        <div class="app-icon">${app.icon}</div>
+        <div class="app-label">${app.label}</div>
+        ${isPinned ? '<div class="app-pinned">•</div>' : ''}
+      </div>`;
   }
 
   const recentPorts = JSON.parse(localStorage.getItem('rc-recent-ports') || '[]');
 
   return `
-    <div class="section-label">Apps</div>
-    <div class="card">
-      <div class="card-row device-row" id="app-code-server">
-        <div class="device-icon">💻</div>
-        <div class="device-info">
-          <div class="device-name">VS Code</div>
-          <div class="device-detail">code-server on port 8080</div>
-        </div>
-        <div style="color:var(--text-tertiary);font-size:18px">›</div>
-      </div>
-      <div class="card-row device-row" id="app-browser">
-        <div class="device-icon">🌐</div>
-        <div class="device-info">
-          <div class="device-name">Browser</div>
-          <div class="device-detail">Access any local service</div>
-        </div>
-        <div style="color:var(--text-tertiary);font-size:18px">›</div>
-      </div>
+    <div class="apps-grid-section">
+      <div class="section-label">Device</div>
+      <div class="apps-grid">${deviceApps.map(appCard).join('')}</div>
+    </div>
+    <div class="apps-grid-section">
+      <div class="section-label">System</div>
+      <div class="apps-grid">${systemApps.map(appCard).join('')}</div>
     </div>
 
-    <div class="section-label">Open Port</div>
+    <div class="section-label" style="margin-top:4px">Open Port</div>
     <div class="card" style="padding:14px 16px">
       <div style="display:flex;gap:8px;align-items:center">
         <input class="settings-input" id="browser-port" type="number" placeholder="Port (e.g. 3000)" style="flex:1;margin:0" />
@@ -473,24 +496,109 @@ function renderSettings() {
   `;
 }
 
+// ── App Launch ──
+
+function handleAppLaunch(appId) {
+  const app = ALL_APPS.find(a => a.id === appId);
+  if (!app) return;
+  if (app.needsDevice && !state.selectedDevice) return;
+
+  // Detach-only apps always open in new window
+  if (app.canDetach === 'only') {
+    if (appId === 'vscode') {
+      api.invoke('open-code-server', { device: state.selectedDevice });
+    } else if (appId === 'browser') {
+      const port = prompt('Enter port number:', '3000');
+      if (port) openBrowser(port, '/');
+    } else if (appId === 'screen') {
+      // TODO: VNC/screen sharing
+      api.invoke('notify', { title: 'Screen', body: 'Screen sharing coming soon' });
+    }
+    return;
+  }
+
+  // Regular apps switch tab
+  state.tab = appId;
+  render();
+  if (appId === 'files' && !state.filesEntries.length && !state.filesLoading) loadFiles(state.filesPath);
+}
+
+// ── Context Menu ──
+
+function showContextMenu(x, y, items) {
+  // Remove existing
+  document.querySelector('.ctx-menu')?.remove();
+
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.innerHTML = items.map((item, i) =>
+    `<div class="ctx-item" data-idx="${i}">${esc(item.label)}</div>`
+  ).join('');
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  document.body.appendChild(menu);
+
+  // Adjust if off-screen
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = (x - rect.width) + 'px';
+  if (rect.bottom > window.innerHeight) menu.style.top = (y - rect.height) + 'px';
+
+  menu.querySelectorAll('.ctx-item').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(el.dataset.idx);
+      items[idx]?.action();
+      menu.remove();
+    });
+  });
+
+  // Close on click outside
+  const close = (e) => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', close); } };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
+
 // ── Events ──
 
 let cmdHistory = [];
 let cmdHistoryIdx = -1;
 
 function bindEvents() {
-  // Tab click + double-click to detach
+  // Tab click + double-click to detach + right-click to unpin
   document.querySelectorAll('.tabbar-item').forEach(el => {
     el.addEventListener('click', () => {
-      state.tab = el.dataset.tab;
+      const tab = el.dataset.tab;
+      const app = ALL_APPS.find(a => a.id === tab);
+      // detach-only apps open in new window
+      if (app?.canDetach === 'only') {
+        handleAppLaunch(tab);
+        return;
+      }
+      state.tab = tab;
       render();
       if (state.tab === 'files' && !state.filesEntries.length && !state.filesLoading) loadFiles(state.filesPath);
     });
     el.addEventListener('dblclick', () => {
       const tab = el.dataset.tab;
-      if (['shell', 'terminal', 'files'].includes(tab)) {
-        api.invoke('open-tab-window', { tab, device: state.selectedDevice, title: `RemoteClaw \u2014 ${tab.charAt(0).toUpperCase() + tab.slice(1)}` });
+      const app = ALL_APPS.find(a => a.id === tab);
+      if (app?.canDetach === true) {
+        api.invoke('open-tab-window', { tab, device: state.selectedDevice, title: `RemoteClaw \u2014 ${app.label}` });
       }
+    });
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const tab = el.dataset.tab;
+      if (tab === 'apps' || tab === 'settings') return; // can't unpin these
+      showContextMenu(e.clientX, e.clientY, [
+        { label: 'Unpin from tab bar', action: () => {
+          state.pinnedTabs = state.pinnedTabs.filter(t => t !== tab);
+          savePinnedTabs(state.pinnedTabs);
+          if (state.tab === tab) state.tab = state.pinnedTabs[0] || 'apps';
+          render();
+        }},
+        ...(ALL_APPS.find(a => a.id === tab)?.canDetach ? [{ label: 'Open in window', action: () => {
+          api.invoke('open-tab-window', { tab, device: state.selectedDevice, title: `RemoteClaw \u2014 ${ALL_APPS.find(a => a.id === tab).label}` });
+        }}] : []),
+      ]);
     });
   });
 
@@ -557,16 +665,43 @@ function bindEvents() {
     api.invoke('open-code-server', { device: state.selectedDevice, folder: state.filesPath });
   });
 
-  // Apps tab events
-  const appCodeServer = document.getElementById('app-code-server');
-  if (appCodeServer) appCodeServer.addEventListener('click', () => {
-    api.invoke('open-code-server', { device: state.selectedDevice });
+  // Apps grid events
+  document.querySelectorAll('.app-card').forEach(el => {
+    el.addEventListener('click', () => {
+      const appId = el.dataset.app;
+      handleAppLaunch(appId);
+    });
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const appId = el.dataset.app;
+      const isPinned = state.pinnedTabs.includes(appId);
+      const items = [];
+      if (isPinned) {
+        items.push({ label: 'Unpin from tab bar', action: () => {
+          state.pinnedTabs = state.pinnedTabs.filter(t => t !== appId);
+          savePinnedTabs(state.pinnedTabs);
+          render();
+        }});
+      } else {
+        items.push({ label: 'Pin to tab bar', action: () => {
+          // Insert before settings
+          const idx = state.pinnedTabs.indexOf('settings');
+          if (idx >= 0) state.pinnedTabs.splice(idx, 0, appId);
+          else state.pinnedTabs.push(appId);
+          savePinnedTabs(state.pinnedTabs);
+          render();
+        }});
+      }
+      const app = ALL_APPS.find(a => a.id === appId);
+      if (app?.canDetach === true) {
+        items.push({ label: 'Open in window', action: () => {
+          api.invoke('open-tab-window', { tab: appId, device: state.selectedDevice, title: `RemoteClaw \u2014 ${app.label}` });
+        }});
+      }
+      showContextMenu(e.clientX, e.clientY, items);
+    });
   });
-  const appBrowser = document.getElementById('app-browser');
-  if (appBrowser) appBrowser.addEventListener('click', () => {
-    const port = prompt('Enter port number:', '3000');
-    if (port) openBrowser(port, '/');
-  });
+
   const browserOpen = document.getElementById('browser-open');
   if (browserOpen) browserOpen.addEventListener('click', () => {
     const port = document.getElementById('browser-port')?.value;
