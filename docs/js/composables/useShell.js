@@ -30,9 +30,16 @@ export function useShell() {
         selectionBackground: 'rgba(59,130,246,0.2)', black: '#161618', brightBlack: '#56565a',
       },
       allowProposedApi: true,
+      unicodeVersion: '11',
     })
     xtermFit = new window.FitAddon.FitAddon()
     xterm.loadAddon(xtermFit)
+    // Enable proper CJK wide character support
+    if (window.Unicode11Addon) {
+      const unicode11 = new window.Unicode11Addon.Unicode11Addon()
+      xterm.loadAddon(unicode11)
+      xterm.unicode.activeVersion = '11'
+    }
     xterm.open(container)
     xtermFit.fit()
 

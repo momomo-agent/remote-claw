@@ -170,7 +170,7 @@ function handleShellOpen(msg) {
     cols: msg.cols || 80,
     rows: msg.rows || 24,
     cwd: os.homedir(),
-    env: { ...process.env, HOME: os.homedir(), PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}` },
+    env: { ...process.env, HOME: os.homedir(), LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}` },
   });
   const session = { pty: term, from: msg.from, idleTimer: null };
   resetShellIdle(msg.sessionId, session);
