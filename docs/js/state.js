@@ -18,7 +18,7 @@ export const ALL_APPS = [
   { id: 'devices',  label: 'Devices',  icon: '📡', canDetach: false, needsDevice: false },
   { id: 'history',  label: 'History',  icon: '📋', canDetach: false, needsDevice: false },
   { id: 'apps',     label: 'Apps',     icon: '⊞',  canDetach: false, needsDevice: false, permanent: true },
-  { id: 'settings', label: 'Settings', icon: '⚙',  canDetach: false, needsDevice: false, permanent: true },
+  { id: 'settings', label: 'Settings', icon: '⚙',  canDetach: false, needsDevice: false },
 ]
 
 const DEFAULT_PINNED = ['devices', 'shell', 'files', 'apps']

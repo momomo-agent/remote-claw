@@ -30,7 +30,7 @@ export default defineComponent({
 
     function onTabContext(e, id) {
       e.preventDefault()
-      if (id === 'apps' || id === 'settings') return
+      if (id === 'apps') return
       const app = ALL_APPS.find(a => a.id === id)
       if (app?.permanent) return
       const items = [
