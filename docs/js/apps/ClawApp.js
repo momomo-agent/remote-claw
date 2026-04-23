@@ -335,14 +335,48 @@ console.log('ok');
 
     function renderConfig() {
       if (!rawConfig.value) return h('div', { class: 'empty' }, 'No config loaded')
-      return h('div', { class: 'card', style: { padding: '12px 14px' } },
-        h('pre', {
-          style: {
-            fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text-secondary)',
-            whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0', maxHeight: '500px', overflow: 'auto',
+      const configJson = JSON.stringify(rawConfig.value, null, 2)
+      return h('div', {
+        style: { flex: '1', display: 'flex', flexDirection: 'column', minHeight: '0' },
+      }, [
+        h('div', {
+          ref: (el) => {
+            if (!el || el._monacoInit) return
+            el._monacoInit = true
+            // Load Monaco from CDN
+            const script = document.createElement('script')
+            script.src = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.min.js'
+            script.onload = () => {
+              window.require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' } })
+              window.require(['vs/editor/editor.main'], (monaco) => {
+                monaco.editor.defineTheme('remoteclaw', {
+                  base: 'vs-dark',
+                  inherit: true,
+                  rules: [],
+                  colors: { 'editor.background': '#161618' },
+                })
+                const editor = monaco.editor.create(el, {
+                  value: configJson,
+                  language: 'json',
+                  theme: 'remoteclaw',
+                  readOnly: true,
+                  minimap: { enabled: false },
+                  scrollBeyondLastLine: false,
+                  fontSize: 12,
+                  lineNumbers: 'off',
+                  folding: true,
+                  wordWrap: 'on',
+                  automaticLayout: true,
+                  padding: { top: 8, bottom: 8 },
+                })
+                el._editor = editor
+              })
+            }
+            document.head.appendChild(script)
           },
-        }, JSON.stringify(rawConfig.value, null, 2))
-      )
+          style: { flex: '1', minHeight: '300px', borderRadius: '6px', overflow: 'hidden' },
+        }),
+      ])
     }
 
     function renderLogs() {
@@ -383,7 +417,7 @@ console.log('ok');
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', height: '100%' } }, [
         renderTabs(),
-        h('div', { style: { flex: '1', overflow: 'auto', padding: '4px 0' } }, [
+        h('div', { style: { flex: '1', overflow: activeTab.value === 'config' ? 'hidden' : 'auto', padding: '4px 0', display: 'flex', flexDirection: 'column' } }, [
           (tabContent[activeTab.value] || renderStatus)(),
         ]),
         // Refresh bar
