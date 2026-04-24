@@ -596,18 +596,21 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
     token = cfg.token || "";
   } catch {}
 
-  const proxy = await startCodeServerProxy({ server, token, device, remotePort: port });
-  const browseUrl = proxy.url + (urlPath || "/");
+  // Start proxy on port 3000 by default (user can navigate to any port via the start page)
+  const remotePort = port || 3000;
+  const proxy = await startCodeServerProxy({ server, token, device, remotePort });
+
+  const startPage = `data:text/html,<html><head><meta charset=utf-8><title>RemoteClaw Browser</title><style>body{font-family:system-ui;background:#1a1a1a;color:#eee;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;gap:12px}input{padding:8px 12px;border-radius:6px;border:1px solid #444;background:#2a2a2a;color:#eee;font-size:14px;width:280px}button{padding:8px 16px;border-radius:6px;border:none;background:#3b82f6;color:#fff;cursor:pointer;font-size:14px}h3{margin:0;color:#aaa}</style></head><body><h3>RemoteClaw Browser — ${device}</h3><input id=p placeholder="localhost:3000" value="localhost:${remotePort}"><button onclick="location.href='${proxy.url}/'.replace('3000',document.getElementById('p').value.split(':')[1]||'3000')">Open</button></body></html>`;
 
   const win = new BrowserWindow({
     width: 1280, height: 800, minWidth: 800, minHeight: 600,
-    title: `localhost:${port} \u2014 ${device || "local"}`,
-    backgroundColor: '#ffffff',
+    title: `Browser \u2014 ${device || "local"}`,
+    backgroundColor: '#1a1a1a',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
     webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
   });
-  win.loadURL(browseUrl);
+  win.loadURL(startPage);
   win.on("closed", () => proxy.close());
   trackIndependentWindow(win);
   return { ok: true };
