@@ -28,13 +28,15 @@ export default defineComponent({
         onChange,
       }, options)
 
+      const deviceOnline = state.selectedDevice && state.devices.some(d => d.id === state.selectedDevice)
+
       // Both tray and detached windows get the same layout: dot + name
       return h('div', {
         style: { display: 'flex', alignItems: 'center', gap: '10px', marginLeft: props.detached ? '72px' : '0' },
       }, [
         h('div', {
-          class: ['status-indicator', state.connected ? 'on' : 'off'],
-          title: state.connected ? 'Connected' : 'Disconnected',
+          class: ['status-indicator', deviceOnline ? 'on' : 'off'],
+          title: deviceOnline ? 'Device online' : 'Device offline',
         }),
         select,
       ])
