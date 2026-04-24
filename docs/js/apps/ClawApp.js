@@ -75,10 +75,7 @@ export default defineComponent({
           }
           providers.value = provs
           defaultModel.value = parsed.default_model || parsed.defaultModel || ''
-          // If no explicit default, infer from first provider's first model
-          if (!defaultModel.value && provs.length && provs[0].models.length) {
-            currentModel.value = `${provs[0].name}/${provs[0].models[0].id}`
-          }
+          currentModel.value = defaultModel.value || ''
 
           // Mask tokens for display
           const display = JSON.parse(c)
@@ -245,7 +242,7 @@ console.log('ok');
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, [
             h('div', {}, [
               h('div', { style: { fontSize: '11px', color: 'var(--text-tertiary)', marginBottom: '4px' } }, 'Active Model'),
-              h('div', { style: { fontSize: '13px', fontWeight: '600', fontFamily: 'var(--mono)' } }, currentModel.value || 'unknown'),
+              h('div', { style: { fontSize: '13px', fontWeight: '600', fontFamily: 'var(--mono)' } }, currentModel.value || '—'),
             ]),
             h('button', {
               class: 'files-btn',
