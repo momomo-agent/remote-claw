@@ -97,7 +97,10 @@ export default defineComponent({
 
     async function gatewayAction(action) {
       restarting.value = true
-      await execOnDevice(`openclaw gateway ${action} 2>&1`, 15000)
+      const cmd = action === 'install'
+        ? 'npm install -g openclaw 2>&1'
+        : `openclaw gateway ${action} 2>&1`
+      await execOnDevice(cmd, action === 'install' ? 60000 : 15000)
       await new Promise(r => setTimeout(r, 2000))
       await refresh()
       restarting.value = false
@@ -218,6 +221,11 @@ console.log('ok');
               onClick: () => gatewayAction(isRunning ? 'stop' : 'start'),
               disabled: restarting.value,
             }, isRunning ? 'Stop' : 'Start'),
+            h('button', {
+              class: 'files-btn', style: { flex: '1', textAlign: 'center', padding: '7px' },
+              onClick: () => gatewayAction('install'),
+              disabled: restarting.value,
+            }, 'Install'),
           ]),
         ]),
       ])
