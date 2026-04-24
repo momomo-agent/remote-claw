@@ -20,7 +20,8 @@ export default defineComponent({
     const statusRaw = ref('')
     const gatewayRaw = ref('')
     const rawConfig = ref(null)       // full parsed config (tokens masked for display)
-    const providers = ref([])          // [{name, baseUrl, api, models: [{id, name, reasoning, contextWindow}]}]
+    const providers = ref([])          // [{name, baseUrl, api, apiKey, models: [{id, name, reasoning, contextWindow}]}]
+    const fallbacks = ref([])
     const currentModel = ref('')       // active model from openclaw status
     const defaultModel = ref('')       // from config
     const logs = ref('')
@@ -63,6 +64,7 @@ export default defineComponent({
                 name,
                 baseUrl: p.baseUrl || '',
                 api: p.api || 'unknown',
+                apiKey: p.apiKey ? p.apiKey.slice(0, 8) + '...' : '',
                 models: (p.models || []).map(m => ({
                   id: m.id,
                   name: m.name || m.id,
@@ -76,6 +78,7 @@ export default defineComponent({
           providers.value = provs
           defaultModel.value = parsed.default_model || parsed.defaultModel || ''
           currentModel.value = parsed.agents?.defaults?.model?.primary || defaultModel.value || ''
+          fallbacks.value = parsed.agents?.defaults?.model?.fallbacks || []
 
           // Mask tokens for display
           const display = JSON.parse(c)
@@ -253,8 +256,10 @@ console.log('ok');
           // Fallback order
           providers.value.length ? h('div', { style: { marginTop: '10px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.06)' } }, [
             h('div', { style: { fontSize: '10px', color: 'var(--text-tertiary)', marginBottom: '4px' } }, 'Fallback Order'),
-            h('div', { style: { fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text-secondary)' } },
-              providers.value.map(p => p.name).join(' → ')
+            h('div', { style: { fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text-secondary)', lineHeight: '1.6' } },
+              fallbacks.value.length
+                ? fallbacks.value.map((m, i) => h('div', null, `${i + 1}. ${m}`))
+                : providers.value.map(p => p.name).join(' → ')
             ),
           ]) : null,
         ]),
@@ -276,6 +281,7 @@ console.log('ok');
                 h('div', { style: { fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--mono)', marginTop: '2px' } },
                   prov.baseUrl.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
                 ),
+                prov.apiKey ? h('div', { style: { fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--mono)', marginTop: '1px' } }, prov.apiKey) : null,
               ]),
               h('span', { style: { fontSize: '10px', color: 'var(--text-tertiary)', padding: '2px 6px', background: 'var(--bg-surface)', borderRadius: '4px' } }, prov.api),
               // Test button
