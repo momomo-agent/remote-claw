@@ -8,6 +8,8 @@
 //   boot.lock            — crash detection marker
 
 const { app, ipcMain } = require("electron");
+
+app.commandLine.appendSwitch('remote-debugging-port', '9229');
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
