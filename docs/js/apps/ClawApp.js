@@ -95,7 +95,7 @@ export default defineComponent({
     async function gatewayAction(action) {
       restarting.value = true
       const cmd = action === 'install'
-        ? 'npm install -g openclaw 2>&1'
+        ? 'openclaw gateway install 2>&1'
         : `openclaw gateway ${action} 2>&1`
       await execOnDevice(cmd, action === 'install' ? 60000 : 15000)
       await new Promise(r => setTimeout(r, 2000))
