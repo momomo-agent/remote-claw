@@ -75,7 +75,7 @@ export default defineComponent({
           }
           providers.value = provs
           defaultModel.value = parsed.default_model || parsed.defaultModel || ''
-          currentModel.value = defaultModel.value || ''
+          currentModel.value = parsed.agents?.defaults?.model?.primary || defaultModel.value || ''
 
           // Mask tokens for display
           const display = JSON.parse(c)
