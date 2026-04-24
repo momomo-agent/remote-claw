@@ -422,7 +422,7 @@ console.log('ok');
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', height: '100%' } }, [
         renderTabs(),
-        h('div', { style: { flex: '1', overflow: activeTab.value === 'config' ? 'hidden' : 'auto', padding: '4px 0', display: 'flex', flexDirection: 'column' } }, [
+        h('div', { key: activeTab.value, style: { flex: '1', overflow: activeTab.value === 'config' ? 'hidden' : 'auto', padding: '4px 0', display: 'flex', flexDirection: 'column' } }, [
           (tabContent[activeTab.value] || renderStatus)(),
         ]),
         // Refresh bar
