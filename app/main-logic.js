@@ -12,7 +12,7 @@ const fs = require("fs");
 const os = require("os");
 
 // APP_DIR must point to the asar resources, not the OTA logic location
-const APP_DIR = path.join(path.dirname(app.getPath('exe')), '..', 'Resources', 'app.asar');
+const APP_DIR = app.getAppPath();
 const LOADING_HTML = path.join(APP_DIR, "loading.html");
 
 // Use system proxy for Chromium network stack (fetch/XHR in renderer)
