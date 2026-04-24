@@ -55,6 +55,7 @@ export async function apiFetch(path, opts = {}) {
           pushHistory({
             command: body.command,
             device: body.device || state.selectedDevice,
+            from: state.localDevice || 'local',
             status: data.exitCode === 0 ? 'done' : data.error ? 'error' : 'done',
             duration: Date.now() - start,
             createdAt: Date.now(),
@@ -71,6 +72,7 @@ export async function refreshData() {
   const cfg = await electronAPI.getConfig()
   state.connected = cfg.connected
   state.configRaw = cfg.raw || null
+  state.localDevice = cfg.localDevice || 'local'
   // Check daemon status
   try {
     const ds = await electronAPI.invoke('daemon-status')

@@ -26,7 +26,7 @@ export default defineComponent({
             h('div', { class: 'card-row history-row' }, [
               h('div', { class: 'history-cmd' }, item.command),
               h('div', { class: 'history-meta' }, [
-                h('span', null, item.device),
+                h('span', null, item.from ? `${item.from} → ${item.device}` : item.device),
                 h('span', { class: `history-badge badge-${item.status}` }, item.status),
                 item.duration ? h('span', null, (item.duration / 1000).toFixed(1) + 's') : null,
                 h('span', null, formatTime(item.createdAt)),

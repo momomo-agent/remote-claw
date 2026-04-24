@@ -338,7 +338,7 @@ function sendToRenderer(channel, data) {
 
 // ── IPC: Config ──
 
-ipcMain.handle("get-config", () => ({ ...config, httpBase, connected, version: LOGIC_VERSION, raw: JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) }));
+ipcMain.handle("get-config", () => ({ ...config, httpBase, connected, version: LOGIC_VERSION, localDevice: os.hostname(), raw: JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) }));
 
 ipcMain.handle("save-config", async (_, newCfg) => {
   const existing = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
