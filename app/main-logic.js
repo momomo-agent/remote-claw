@@ -553,6 +553,16 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
   } catch {}
 
   try {
+    // Start code-server on remote device if not already running
+    if (device) {
+      const execOpts = { method: "POST", headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" } };
+      const checkRes = await (await fetch(`${httpBase}/exec`, { ...execOpts, body: JSON.stringify({ device, command: `lsof -i :${remotePort} -t 2>/dev/null | head -1`, oneshot: true, timeout: 5000 }) })).json();
+      if (!checkRes?.stdout?.trim()) {
+        await fetch(`${httpBase}/exec`, { ...execOpts, body: JSON.stringify({ device, command: `nohup code-server --bind-addr 127.0.0.1:${remotePort} --auth none > /tmp/code-server.log 2>&1 &`, oneshot: true, timeout: 5000 }) });
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+
     const proxy = await startCodeServerProxy({ server, token, device, remotePort });
     const codeUrl = proxy.url + (folder ? `/?folder=${encodeURIComponent(folder)}` : "");
 
