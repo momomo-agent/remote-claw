@@ -178,7 +178,7 @@ console.log('ok');
       const gwInfo = parseStatus(gatewayRaw.value)
       const isRunning = gatewayRaw.value.toLowerCase().includes('running') || gwInfo['status']?.toLowerCase().includes('running')
 
-      return h('div', {}, [
+      return h('div', { style: { display: 'flex', flexDirection: 'column', flex: '1', minHeight: '0' } }, [
         // Status card
         h('div', { class: 'card' }, [
           h('div', { class: 'card-row', style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px' } }, [
@@ -206,8 +206,8 @@ console.log('ok');
 
         // Gateway controls
         h('div', { class: 'section-label', style: { marginTop: '12px' } }, 'Gateway'),
-        h('div', { class: 'card', style: { padding: '12px 14px' } }, [
-          h('div', { style: { fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', fontFamily: 'var(--mono)', whiteSpace: 'pre-wrap', maxHeight: '80px', overflow: 'auto' } },
+        h('div', { class: 'card', style: { padding: '12px 14px', flex: '1', display: 'flex', flexDirection: 'column', minHeight: '0' } }, [
+          h('div', { style: { fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', fontFamily: 'var(--mono)', whiteSpace: 'pre-wrap', flex: '1', overflow: 'auto', minHeight: '0' } },
             gatewayRaw.value || 'No info'
           ),
           h('div', { style: { display: 'flex', gap: '8px' } }, [
