@@ -58,8 +58,12 @@ function connect() {
 
   ws = new WebSocket(url);
 
+  let connectedAt = 0;
+  let lastPongAt = 0;
   ws.on("open", () => {
-    console.log("Connected.");
+    connectedAt = Date.now();
+    lastPongAt = Date.now();
+    console.log(`Connected at ${new Date(connectedAt).toISOString()}`);
     reconnectDelay = 1000;
     // Keep-alive ping every 15s. CF idle timeout is 30s but in practice
     // 25s still got dropped — CF or intermediate NAT may close earlier.
@@ -90,7 +94,7 @@ function connect() {
       const msg = JSON.parse(data.toString());
       if (msg.type !== "pong") console.log(`[ws] recv: ${msg.type}${msg.sessionId ? ' sid=' + msg.sessionId : ''}`);
       if (msg.type === "exec") execCommand(msg.taskId, msg.command);
-      if (msg.type === "pong") { /* keepalive ack */ }
+      if (msg.type === "pong") { lastPongAt = Date.now(); }
       // File transfer via WS relay
       if (msg.type === "file-start") handleIncomingFileStart(msg);
       if (msg.type === "file-chunk") handleIncomingFileChunk(msg);
@@ -114,8 +118,11 @@ function connect() {
     }
   });
 
-  ws.on("close", () => {
-    console.log(`Disconnected. Reconnecting in ${reconnectDelay / 1000}s...`);
+  ws.on("close", (code, reason) => {
+    const reasonStr = reason ? reason.toString() : '';
+    const lifetime = connectedAt ? ((Date.now() - connectedAt) / 1000).toFixed(1) : '?';
+    const sincePong = lastPongAt ? ((Date.now() - lastPongAt) / 1000).toFixed(1) : '?';
+    console.log(`Disconnected (code=${code}${reasonStr ? ' reason=' + reasonStr : ''}) after ${lifetime}s, last pong ${sincePong}s ago. Reconnecting in ${reconnectDelay / 1000}s...`);
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_DELAY);
   });
