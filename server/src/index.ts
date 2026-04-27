@@ -196,6 +196,20 @@ export class DeviceHub {
     `);
     // Cleanup expired transfers every 5 minutes
     state.storage.setAlarm(Date.now() + 300000);
+    // Rebuild in-memory maps after hibernation wakeup. The runtime reopens all
+    // persisted websockets; we read their attachment to repopulate devices/clients.
+    for (const ws of state.getWebSockets()) {
+      try {
+        const att = ws.deserializeAttachment() as { deviceId?: string; role?: string; connectedAt?: number } | null;
+        if (!att?.deviceId) continue;
+        const entry = { ws, name: att.deviceId, connectedAt: att.connectedAt || Date.now() };
+        if (att.role === "client") this.clients.set(att.deviceId, entry);
+        else this.devices.set(att.deviceId, entry);
+      } catch {}
+    }
+    // Request auto-ping/pong via hibernation API so CF keeps TCP alive even
+    // while DO is evicted. This is separate from our JSON-level ping/pong.
+    try { state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}')); } catch {}
   }
 
   async alarm() {
@@ -373,108 +387,100 @@ export class DeviceHub {
   }
 
   private handleWs(ws: WebSocket, deviceName: string, role: string) {
-    ws.accept();
     const deviceId = deviceName;
     const isClient = role === "client";
+    const connectedAt = Date.now();
+    // Persist association so we can rebuild after hibernation wakeup.
+    ws.serializeAttachment({ deviceId, role, connectedAt });
+    // Accept via hibernation API so CF keeps the socket alive while DO is
+    // evicted from memory. Tags let us query `getWebSockets(tag)`.
+    this.state.acceptWebSocket(ws, [deviceId, role]);
+    if (isClient) this.clients.set(deviceId, { ws, name: deviceName, connectedAt });
+    else this.devices.set(deviceId, { ws, name: deviceName, connectedAt });
+  }
 
-    // Only register as device if role=device (daemon)
-    if (!isClient) {
-      this.devices.set(deviceId, { ws, name: deviceName, connectedAt: Date.now() });
-    }
-    // Clients get tracked separately for message relay
-    if (isClient) {
-      if (!this.clients) this.clients = new Map();
-      this.clients.set(deviceId, { ws, name: deviceName, connectedAt: Date.now() });
+  // Hibernation API handler: runs every time a message arrives, even after
+  // the DO was evicted from memory.
+  async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string) {
+    const att = ws.deserializeAttachment() as { deviceId?: string; role?: string } | null;
+    const deviceId = att?.deviceId || "";
+    if (!deviceId) return;
+
+    // Binary frame: tunnel protocol. Forward by peer field (byte 5..5+peerLen).
+    if (typeof message !== "string") {
+      const u8 = new Uint8Array(message);
+      if (u8.length < 6) return;
+      const peerLen = u8[5];
+      if (u8.length < 6 + peerLen) return;
+      const peerBytes = u8.subarray(6, 6 + peerLen);
+      const targetId = new TextDecoder("utf-8").decode(peerBytes);
+      const target = this.devices.get(targetId) || this.clients.get(targetId);
+      if (!target) return;
+      const fromBytes = new TextEncoder().encode(deviceId);
+      const out = new Uint8Array(6 + fromBytes.length + (u8.length - 6 - peerLen));
+      out[0] = u8[0]; out[1] = u8[1]; out[2] = u8[2]; out[3] = u8[3]; out[4] = u8[4];
+      out[5] = fromBytes.length;
+      out.set(fromBytes, 6);
+      out.set(u8.subarray(6 + peerLen), 6 + fromBytes.length);
+      target.ws.send(out.buffer as ArrayBuffer);
+      return;
     }
 
-    ws.addEventListener("message", (event) => {
-      // Binary frame: tunnel protocol. Forward by peer field (byte 5..5+peerLen).
-      // Frame: op(1) + reqId(4) + peerLen(1) + peer(peerLen) + payload(...)
-      const raw = event.data as any;
-      if (raw instanceof ArrayBuffer) {
-        const u8 = new Uint8Array(raw);
-        if (u8.length < 6) return;
-        const peerLen = u8[5];
-        if (u8.length < 6 + peerLen) return;
-        const peerBytes = u8.subarray(6, 6 + peerLen);
-        const targetId = new TextDecoder("utf-8").decode(peerBytes);
-        const target = this.devices.get(targetId) || this.clients?.get(targetId);
-        if (!target) return; // silently drop; initiator can time out
-        // Rewrite peer field with current sender's deviceId so the receiver knows who to reply to.
-        const fromBytes = new TextEncoder().encode(deviceId);
-        const out = new Uint8Array(6 + fromBytes.length + (u8.length - 6 - peerLen));
-        out[0] = u8[0]; out[1] = u8[1]; out[2] = u8[2]; out[3] = u8[3]; out[4] = u8[4];
-        out[5] = fromBytes.length;
-        out.set(fromBytes, 6);
-        out.set(u8.subarray(6 + peerLen), 6 + fromBytes.length);
-        target.ws.send(out.buffer as ArrayBuffer);
-        return;
+    try {
+      const msg = JSON.parse(message);
+      if (msg.type === "result") {
+        const task = this.tasks.get(msg.taskId);
+        if (task) {
+          task.stdout = msg.stdout || "";
+          task.stderr = msg.stderr || "";
+          task.exitCode = msg.exitCode ?? null;
+          task.status = msg.exitCode === 0 ? "done" : "error";
+          task.completedAt = Date.now();
+          const resolver = this.taskResolvers.get(msg.taskId);
+          if (resolver) { resolver(task); this.taskResolvers.delete(msg.taskId); }
+          this.saveHistory(task);
+        }
       }
-      try {
-        const msg = JSON.parse(event.data as string);
-        if (msg.type === "result") {
-          const task = this.tasks.get(msg.taskId);
-          if (task) {
-            task.stdout = msg.stdout || "";
-            task.stderr = msg.stderr || "";
-            task.exitCode = msg.exitCode ?? null;
-            task.status = msg.exitCode === 0 ? "done" : "error";
-            task.completedAt = Date.now();
-            const resolver = this.taskResolvers.get(msg.taskId);
-            if (resolver) { resolver(task); this.taskResolvers.delete(msg.taskId); }
-            this.saveHistory(task);
-          }
-        }
-        if (msg.type === "ping") ws.send(JSON.stringify({ type: "pong" }));
+      // ping is handled by setWebSocketAutoResponse (DO stays hibernated).
+      // We keep a fallback in case auto-response is unavailable.
+      if (msg.type === "ping") { try { ws.send(JSON.stringify({ type: "pong" })); } catch {} return; }
 
-        // File transfer relay — forward between devices/clients
-        if (msg.type === "file-start" || msg.type === "file-chunk" || msg.type === "file-end") {
-          const target = this.devices.get(msg.to) || this.clients?.get(msg.to);
-          if (target) {
-            target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
-          } else {
-            ws.send(JSON.stringify({ type: "file-error", transferId: msg.transferId, error: `device ${msg.to} not connected` }));
-          }
-        }
+      if (msg.type === "file-start" || msg.type === "file-chunk" || msg.type === "file-end") {
+        const target = this.devices.get(msg.to) || this.clients.get(msg.to);
+        if (target) target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
+        else ws.send(JSON.stringify({ type: "file-error", transferId: msg.transferId, error: `device ${msg.to} not connected` }));
+      }
+      if (msg.type === "shell-open" || msg.type === "shell-input" || msg.type === "shell-resize" || msg.type === "shell-close" ||
+          msg.type === "shell-data" || msg.type === "shell-exit") {
+        const target = this.devices.get(msg.to) || this.clients.get(msg.to);
+        if (target) target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
+      }
+      if (msg.type === "screen-start" || msg.type === "screen-stop" || msg.type === "screen-input" ||
+          msg.type === "screen-frame") {
+        const target = this.devices.get(msg.to) || this.clients.get(msg.to);
+        if (target) target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
+      }
+      if (msg.type === "http-proxy-request" || msg.type === "http-proxy-response" ||
+          msg.type === "ws-proxy-open" || msg.type === "ws-proxy-data" || msg.type === "ws-proxy-close") {
+        const target = this.devices.get(msg.to) || this.clients.get(msg.to);
+        if (target) target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
+      }
+    } catch {}
+  }
 
-        // Shell session relay — forward between devices/clients
-        if (msg.type === "shell-open" || msg.type === "shell-input" || msg.type === "shell-resize" || msg.type === "shell-close" ||
-            msg.type === "shell-data" || msg.type === "shell-exit") {
-          const target = this.devices.get(msg.to) || this.clients?.get(msg.to);
-          if (target) {
-            target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
-          }
-        }
+  async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean) {
+    const att = ws.deserializeAttachment() as { deviceId?: string; role?: string } | null;
+    if (!att?.deviceId) return;
+    if (att.role === "client") this.clients.delete(att.deviceId);
+    else this.devices.delete(att.deviceId);
+    try { ws.close(1000, "closing"); } catch {}
+  }
 
-        // Screen capture relay — forward between devices/clients
-        if (msg.type === "screen-start" || msg.type === "screen-stop" || msg.type === "screen-input" ||
-            msg.type === "screen-frame") {
-          const target = this.devices.get(msg.to) || this.clients?.get(msg.to);
-          if (target) {
-            target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
-          }
-        }
-
-        // HTTP/WS proxy relay — forward between app and device
-        if (msg.type === "http-proxy-request" || msg.type === "http-proxy-response" ||
-            msg.type === "ws-proxy-open" || msg.type === "ws-proxy-data" || msg.type === "ws-proxy-close") {
-          const target = this.devices.get(msg.to) || this.clients?.get(msg.to);
-          if (target) {
-            target.ws.send(JSON.stringify({ ...msg, from: deviceId }));
-          }
-        }
-      } catch {}
-    });
-
-    ws.addEventListener("close", () => {
-      this.devices.delete(deviceId);
-      this.clients?.delete(deviceId);
-    });
-
-    ws.addEventListener("error", () => {
-      this.devices.delete(deviceId);
-      this.clients?.delete(deviceId);
-    });
+  async webSocketError(ws: WebSocket, _err: unknown) {
+    const att = ws.deserializeAttachment() as { deviceId?: string; role?: string } | null;
+    if (!att?.deviceId) return;
+    if (att.role === "client") this.clients.delete(att.deviceId);
+    else this.devices.delete(att.deviceId);
   }
 
   private async saveHistory(task: Task) {
