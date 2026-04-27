@@ -237,7 +237,20 @@ function handleShellInput(msg) {
 function handleShellResize(msg) {
   const session = shellSessions.get(msg.sessionId);
   if (!session) return;
-  session.pty.resize(msg.cols, msg.rows);
+  // Defensive: cols/rows may be 0/undefined if client sent before xterm fit().
+  // node-pty.resize(0, 0) throws, killing the surrounding try/catch but
+  // leaving the pty in an undefined state (it still runs & buffers data).
+  const cols = Number.isInteger(msg.cols) && msg.cols > 0 ? msg.cols : null;
+  const rows = Number.isInteger(msg.rows) && msg.rows > 0 ? msg.rows : null;
+  if (cols == null || rows == null) {
+    console.log(`[shell] resize skipped: bad dims cols=${msg.cols} rows=${msg.rows} sid=${msg.sessionId}`);
+    return;
+  }
+  try {
+    session.pty.resize(cols, rows);
+  } catch (e) {
+    console.log(`[shell] resize error: ${e.message} sid=${msg.sessionId}`);
+  }
 }
 
 function handleShellClose(msg) {
