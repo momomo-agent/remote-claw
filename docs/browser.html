@@ -1,0 +1,286 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>RemoteClaw Browser</title>
+<style>
+  :root {
+    --bg: #1a1a1a;
+    --surface: #232326;
+    --surface-hover: #2e2e32;
+    --border: #38383d;
+    --fg: #e8e8ea;
+    --fg-dim: #a0a0a6;
+    --accent: #3b82f6;
+    --danger: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: var(--bg); color: var(--fg); font-family: -apple-system, system-ui, sans-serif; font-size: 13px; }
+  body { display: flex; flex-direction: column; }
+
+  .toolbar {
+    -webkit-app-region: drag;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px 8px 80px; /* 80px for traffic lights */
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    height: 42px;
+  }
+  .toolbar button, .toolbar input { -webkit-app-region: no-drag; }
+
+  .nav-btn {
+    background: transparent;
+    border: none;
+    color: var(--fg);
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s;
+  }
+  .nav-btn:hover:not(:disabled) { background: var(--surface-hover); }
+  .nav-btn:disabled { opacity: 0.3; cursor: default; }
+
+  .url-bar {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0 10px;
+    height: 28px;
+    gap: 8px;
+  }
+  .url-bar:focus-within { border-color: var(--accent); }
+  .url-prefix {
+    color: var(--fg-dim);
+    font-size: 11px;
+    font-family: ui-monospace, Menlo, monospace;
+    user-select: none;
+  }
+  .url-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--fg);
+    font-size: 12px;
+    font-family: ui-monospace, Menlo, monospace;
+    padding: 0;
+  }
+
+  .device-label {
+    color: var(--fg-dim);
+    font-size: 11px;
+    padding: 0 8px;
+    user-select: none;
+  }
+
+  .webview-container {
+    flex: 1;
+    display: flex;
+    position: relative;
+    background: #fff;
+  }
+  webview {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    border: none;
+  }
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    color: var(--fg-dim);
+    font-size: 13px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .overlay.show { opacity: 1; pointer-events: auto; }
+  .overlay.error { color: var(--danger); }
+
+  .spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <button class="nav-btn" id="back" title="Back" disabled>‹</button>
+    <button class="nav-btn" id="forward" title="Forward" disabled>›</button>
+    <button class="nav-btn" id="reload" title="Reload">⟳</button>
+    <div class="url-bar">
+      <span class="url-prefix" id="urlPrefix">localhost:</span>
+      <input class="url-input" id="url" type="text" spellcheck="false" autocomplete="off" placeholder="3000/">
+    </div>
+    <span class="device-label" id="deviceLabel"></span>
+  </div>
+  <div class="webview-container">
+    <webview id="wv" allowpopups></webview>
+    <div class="overlay" id="overlay">
+      <div class="spinner" id="spinner" style="display:none"></div>
+      <span id="overlayText">Loading…</span>
+    </div>
+  </div>
+
+<script>
+  const qs = new URLSearchParams(location.search);
+  const device = qs.get('device') || '';
+  const initialPort = parseInt(qs.get('port') || '3000', 10);
+  const initialPath = qs.get('path') || '/';
+
+  document.getElementById('deviceLabel').textContent = device ? `→ ${device}` : '';
+  document.title = `Browser — ${device || 'local'}`;
+
+  const wv = document.getElementById('wv');
+  const backBtn = document.getElementById('back');
+  const fwdBtn = document.getElementById('forward');
+  const reloadBtn = document.getElementById('reload');
+  const urlInput = document.getElementById('url');
+  const overlay = document.getElementById('overlay');
+  const overlayText = document.getElementById('overlayText');
+  const spinner = document.getElementById('spinner');
+
+  // State: current proxy info (port-scoped on the local side)
+  let currentPort = initialPort;
+  let proxyBase = null; // http://127.0.0.1:<localPort>
+  let navigating = false;
+  let userEditing = false;
+
+  // Parse "port/path" from the URL input (e.g. "3000/foo", "8080", ":8080/foo")
+  function parseBar(text) {
+    const raw = (text || '').trim();
+    const m = raw.match(/^:?(\d+)?(\/.*)?$/);
+    if (!m) return null;
+    const p = m[1] ? parseInt(m[1], 10) : currentPort;
+    const path = m[2] || '/';
+    return { port: p, path };
+  }
+
+  function formatBar(port, path) {
+    return `${port}${path || '/'}`;
+  }
+
+  function showOverlay(text, isError = false, showSpinner = false) {
+    overlayText.textContent = text;
+    overlay.classList.toggle('show', true);
+    overlay.classList.toggle('error', isError);
+    spinner.style.display = showSpinner ? 'inline-block' : 'none';
+  }
+  function hideOverlay() {
+    overlay.classList.remove('show', 'error');
+  }
+
+  async function navigate(port, path) {
+    if (navigating) return;
+    navigating = true;
+    showOverlay(`Connecting to ${device || 'local'}:${port}…`, false, true);
+
+    try {
+      // Ask main to (re)start proxy on the requested remote port
+      const result = await window.electronAPI.invoke('browser-start-proxy', { device, port });
+      if (!result || result.error) throw new Error(result?.error || 'proxy failed');
+      proxyBase = result.url;
+      currentPort = port;
+      const target = proxyBase + (path.startsWith('/') ? path : '/' + path);
+      wv.src = target;
+    } catch (e) {
+      showOverlay(`Proxy failed: ${e.message}`, true, false);
+    } finally {
+      navigating = false;
+    }
+  }
+
+  // Sync url input from webview url
+  function updateBarFromWebview() {
+    if (userEditing || !proxyBase) return;
+    try {
+      const u = wv.getURL();
+      if (!u || !u.startsWith(proxyBase)) return;
+      const path = u.slice(proxyBase.length) || '/';
+      urlInput.value = formatBar(currentPort, path);
+    } catch {}
+  }
+
+  // Wire up nav buttons
+  backBtn.addEventListener('click', () => { if (wv.canGoBack()) wv.goBack(); });
+  fwdBtn.addEventListener('click', () => { if (wv.canGoForward()) wv.goForward(); });
+  reloadBtn.addEventListener('click', () => wv.reload());
+
+  // URL input handling
+  urlInput.addEventListener('focus', () => { userEditing = true; urlInput.select(); });
+  urlInput.addEventListener('blur', () => { userEditing = false; updateBarFromWebview(); });
+  urlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const parsed = parseBar(urlInput.value);
+      if (!parsed) return;
+      userEditing = false;
+      if (parsed.port !== currentPort) {
+        navigate(parsed.port, parsed.path);
+      } else if (proxyBase) {
+        wv.src = proxyBase + parsed.path;
+      }
+      urlInput.blur();
+    } else if (e.key === 'Escape') {
+      updateBarFromWebview();
+      urlInput.blur();
+    }
+  });
+
+  // Webview lifecycle
+  wv.addEventListener('did-start-loading', () => {
+    reloadBtn.textContent = '×';
+    reloadBtn.title = 'Stop';
+  });
+  wv.addEventListener('did-stop-loading', () => {
+    reloadBtn.textContent = '⟳';
+    reloadBtn.title = 'Reload';
+    backBtn.disabled = !wv.canGoBack();
+    fwdBtn.disabled = !wv.canGoForward();
+    updateBarFromWebview();
+    hideOverlay();
+  });
+  wv.addEventListener('did-fail-load', (e) => {
+    // -3 = aborted (normal on nav redirects), ignore
+    if (e.errorCode === -3) return;
+    showOverlay(`Load failed: ${e.errorDescription || e.errorCode}`, true, false);
+  });
+  wv.addEventListener('page-title-updated', (e) => {
+    document.title = `${e.title} — ${device || 'local'}`;
+  });
+
+  // Ctrl/Cmd+L focuses URL bar
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'l') {
+      e.preventDefault();
+      urlInput.focus();
+    }
+  });
+
+  // Initial load
+  urlInput.value = formatBar(initialPort, initialPath);
+  navigate(initialPort, initialPath);
+</script>
+</body>
+</html>

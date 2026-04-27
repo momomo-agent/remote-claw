@@ -1,6 +1,6 @@
 // RemoteClaw Main Logic — hot-updatable via GitHub
 // App is a pure UI client. Daemon handles all command execution.
-const LOGIC_VERSION = "1.1.0";
+const LOGIC_VERSION = "1.1.1";
 const PKG_VERSION = "1.1.0"; // must match package.json — bump when deps change
 
 const { app, nativeImage, ipcMain } = require("electron");
@@ -584,10 +584,10 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
   }
 });
 
-ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
-  const { BrowserWindow } = require("electron");
-  const { startCodeServerProxy } = require(path.join(APP_DIR, "code-server-proxy"));
+// Registry of browser windows — one proxy per window, can be re-pointed to different remote ports
+const browserProxies = new WeakMap(); // win -> { proxy, device, remotePort }
 
+function getRelayConfig() {
   let server = "wss://remote.momomo.dev";
   let token = "";
   try {
@@ -595,25 +595,70 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
     server = cfg.server || server;
     token = cfg.token || "";
   } catch {}
+  return { server, token };
+}
 
-  // Start proxy on port 3000 by default (user can navigate to any port via the start page)
+ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
+  const { BrowserWindow } = require("electron");
   const remotePort = port || 3000;
-  const proxy = await startCodeServerProxy({ server, token, device, remotePort });
-
-  const startPage = `data:text/html,<html><head><meta charset=utf-8><title>RemoteClaw Browser</title><style>body{font-family:system-ui;background:#1a1a1a;color:#eee;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;gap:12px}input{padding:8px 12px;border-radius:6px;border:1px solid #444;background:#2a2a2a;color:#eee;font-size:14px;width:280px}button{padding:8px 16px;border-radius:6px;border:none;background:#3b82f6;color:#fff;cursor:pointer;font-size:14px}h3{margin:0;color:#aaa}</style></head><body><h3>RemoteClaw Browser — ${device}</h3><input id=p placeholder="localhost:3000" value="localhost:${remotePort}"><button onclick="location.href='${proxy.url}/'.replace('3000',document.getElementById('p').value.split(':')[1]||'3000')">Open</button></body></html>`;
+  const initialPath = urlPath || "/";
 
   const win = new BrowserWindow({
-    width: 1280, height: 800, minWidth: 800, minHeight: 600,
+    width: 1280, height: 820, minWidth: 800, minHeight: 600,
     title: `Browser \u2014 ${device || "local"}`,
     backgroundColor: '#1a1a1a',
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 12, y: 12 },
-    webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: false,
+      webviewTag: true,
+      preload: path.join(APP_DIR, "preload.js"),
+    },
   });
-  win.loadURL(startPage);
-  win.on("closed", () => proxy.close());
+
+  const cachedBrowser = path.join(UI_CACHE_DIR, "browser.html");
+  const browserBase = fs.existsSync(cachedBrowser) ? `file://${cachedBrowser}` : CLOUD_URL + "browser.html";
+  const fileUrl = new URL(browserBase);
+  if (device) fileUrl.searchParams.set("device", device);
+  fileUrl.searchParams.set("port", String(remotePort));
+  fileUrl.searchParams.set("path", initialPath);
+  win.loadURL(fileUrl.toString());
+
+  win.on("closed", () => {
+    const entry = browserProxies.get(win);
+    if (entry?.proxy) { try { entry.proxy.close(); } catch {} }
+    browserProxies.delete(win);
+  });
   trackIndependentWindow(win);
   return { ok: true };
+});
+
+// Renderer calls this when user navigates to a new remote port — (re)start proxy and return local URL.
+ipcMain.handle("browser-start-proxy", async (evt, { device, port }) => {
+  const { BrowserWindow } = require("electron");
+  const { startCodeServerProxy } = require(path.join(APP_DIR, "code-server-proxy"));
+  const win = BrowserWindow.fromWebContents(evt.sender);
+  if (!win) return { error: "no window" };
+
+  const remotePort = parseInt(port, 10) || 3000;
+  const existing = browserProxies.get(win);
+  if (existing && existing.remotePort === remotePort && existing.proxy) {
+    return { ok: true, url: existing.proxy.url, reused: true };
+  }
+
+  // Close previous proxy if pointing to a different port
+  if (existing?.proxy) { try { existing.proxy.close(); } catch {} }
+
+  try {
+    const { server, token } = getRelayConfig();
+    const proxy = await startCodeServerProxy({ server, token, device, remotePort });
+    browserProxies.set(win, { proxy, device, remotePort });
+    return { ok: true, url: proxy.url };
+  } catch (e) {
+    return { error: e.message || String(e) };
+  }
 });
 
 // ── IPC: Clipboard ──
@@ -687,6 +732,7 @@ const UI_FILES = [
   "index.html",
   "preview.html",
   "editor.html",
+  "browser.html",
   "js/app.js",
   "js/state.js",
   "js/api.js",
