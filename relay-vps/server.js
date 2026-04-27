@@ -111,7 +111,8 @@ function peerSocket(id) {
 function broadcastDevicesAll() {
   const payload = JSON.stringify({ type: "devices", devices: Array.from(devices.keys()) });
   for (const ws of clients) { if (ws.readyState === ws.OPEN) { try { ws.send(payload); } catch {} } }
-  for (const ws of devices.values()) { if (ws.readyState === ws.OPEN) { try { ws.send(payload); } catch {} } }
+  // NOTE: don't broadcast to devices — they don't need it and it causes
+  // unnecessary receive-side activity that can delay ping/pong handling.
 }
 
 // ── HTTP ──

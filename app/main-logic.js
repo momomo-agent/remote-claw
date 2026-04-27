@@ -686,7 +686,9 @@ function startCodeServerProxy({ server, token, device, remotePort = 8080, onStat
 
   function connectRelay() {
     if (closed) return;
-    relayWs = new WebSocket(relayUrl);
+    // perMessageDeflate off: tiny ping/pong frames stall in deflate buffer
+    // awaiting flush — observed 7-14s RTT with compression on.
+    relayWs = new WebSocket(relayUrl, { perMessageDeflate: false });
     relayWs.on("open", () => {
       wsReady = true; everConnected = true;
       while (sendQueue.length) relayWs.send(sendQueue.shift(), { binary: true });
@@ -931,7 +933,7 @@ function startUniversalHttpProxy({ server, token, device, onStateChange }) {
 
   function connectRelay() {
     if (closed) return;
-    relayWs = new WebSocket(relayUrl);
+    relayWs = new WebSocket(relayUrl, { perMessageDeflate: false });
     relayWs.on("open", () => {
       wsReady = true; everConnected = true;
       while (sendQueue.length) relayWs.send(sendQueue.shift(), { binary: true });

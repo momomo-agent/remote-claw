@@ -56,7 +56,9 @@ function connect() {
   const url = `${config.server}/ws?device=${encodeURIComponent(name)}&token=${encodeURIComponent(config.token)}`;
   console.log(`Connecting to ${config.server} as "${name}"...`);
 
-  ws = new WebSocket(url);
+  // Disable permessage-deflate: small ping/pong frames get stuck in
+  // deflate's output buffer waiting for a flush, causing 7-14s RTT.
+  ws = new WebSocket(url, { perMessageDeflate: false });
 
   let connectedAt = 0;
   let lastPongAt = 0;
@@ -98,7 +100,10 @@ function connect() {
         pingSeq++;
         pingLog.push([pingSeq, pingSentAt]);
         while (pingLog.length > 20) pingLog.shift();
-        try { ws.ping(Buffer.from(String(pingSeq))); } catch {}
+        const bufBefore = ws.bufferedAmount || 0;
+        try { ws.ping(Buffer.from(String(pingSeq))); } catch (e) { console.log('[ping] send err:', e.message); }
+        const bufAfter = ws.bufferedAmount || 0;
+        console.log(`[ping] seq=${pingSeq} sent bufBefore=${bufBefore} bufAfter=${bufAfter} ext=${JSON.stringify(ws.extensions || {})}`);
       }
     };
     sendPing();
