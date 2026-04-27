@@ -79,9 +79,10 @@ export async function refreshData() {
     state.daemonRunning = ds?.running || false
     state.daemonInstalled = ds?.installed || false
   } catch { state.daemonRunning = false }
+  // Use IPC instead of renderer fetch — renderer fetch hits Electron CSP/network issues
   const [devices, history] = await Promise.all([
-    apiFetch('/devices'),
-    apiFetch('/history?limit=50'),
+    electronAPI.fetchDevices().catch(() => []),
+    electronAPI.fetchHistory(50).catch(() => []),
   ])
   state.devices = Array.isArray(devices) ? devices.filter(d => !d.id?.startsWith('app-')) : []
   // Merge server history with local; prefer server if available

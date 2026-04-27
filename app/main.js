@@ -9,7 +9,7 @@
 
 const { app, ipcMain } = require("electron");
 
-app.commandLine.appendSwitch('remote-debugging-port', '9229');
+app.commandLine.appendSwitch('remote-debugging-port', '9222');
 const fs = require("fs");
 const path = require("path");
 const https = require("https");

@@ -83,7 +83,14 @@ export default defineComponent({
             h('div', {
               key: p.key,
               class: 'card-row',
-              style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', fontSize: '12px' },
+              style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', fontSize: '12px', cursor: 'pointer' },
+              onClick: () => {
+                if (p.device) state.selectedDevice = p.device
+                if (p.kind?.includes('vscode')) state.currentApp = 'vscode'
+                else if (p.kind?.includes('browser') || p.kind?.includes('universal-http')) state.currentApp = 'browser'
+                else state.currentApp = 'claw'
+              },
+              title: 'Open this proxy',
             }, [
               h('div', {
                 style: {
