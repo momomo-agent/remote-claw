@@ -243,9 +243,14 @@
   reloadBtn.addEventListener('click', () => wv.reload());
 
   // URL input
+  let imeComposing = false;
   urlInput.addEventListener('focus', () => { userEditing = true; urlInput.select(); });
   urlInput.addEventListener('blur', () => { userEditing = false; updateBar(); });
+  urlInput.addEventListener('compositionstart', () => { imeComposing = true; });
+  urlInput.addEventListener('compositionend', () => { imeComposing = false; });
   urlInput.addEventListener('keydown', (e) => {
+    // Ignore Enter while IME candidate window is open (keyCode 229 on Chromium)
+    if (imeComposing || e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter') {
       e.preventDefault();
       userEditing = false;
