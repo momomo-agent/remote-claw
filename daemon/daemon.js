@@ -65,17 +65,26 @@ function connect() {
     lastPongAt = Date.now();
     console.log(`Connected at ${new Date(connectedAt).toISOString()}`);
     reconnectDelay = 1000;
-    // Keep-alive ping every 15s. CF idle timeout is 30s but in practice
-    // 25s still got dropped — CF or intermediate NAT may close earlier.
-    // Also send an immediate ping on open to seed the connection.
+    // Keep-alive. CF idle timeout ~30s but half-open sockets can linger for minutes:
+    // node's ws does NOT fire 'close' automatically on silent-dead peers. So we
+    // actively terminate if no pong returns within 45s.
+    const PING_MS = 15000;
+    const PONG_TIMEOUT_MS = 45000;
     const sendPing = () => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
     };
     sendPing();
     const pingInterval = setInterval(() => {
-      if (ws.readyState === ws.OPEN) sendPing();
-      else clearInterval(pingInterval);
-    }, 15000);
+      if (ws.readyState !== ws.OPEN) { clearInterval(pingInterval); return; }
+      const sincePong = Date.now() - lastPongAt;
+      if (sincePong > PONG_TIMEOUT_MS) {
+        console.log(`No pong for ${(sincePong/1000).toFixed(1)}s — forcing reconnect (ws.terminate)`);
+        try { ws.terminate(); } catch {}
+        clearInterval(pingInterval);
+        return;
+      }
+      sendPing();
+    }, PING_MS);
     ws.on("close", () => clearInterval(pingInterval));
   });
 
