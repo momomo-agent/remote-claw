@@ -1186,15 +1186,26 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath, url }) =
     },
   });
 
-  // Route the window (and its <webview>) through our local proxy
-  try {
-    await win.webContents.session.setProxy({
-      proxyRules: `http=127.0.0.1:${proxyPort};https=127.0.0.1:${proxyPort}`,
-      proxyBypassRules: "<-loopback>", // do NOT bypass loopback; our proxy listens on 127.0.0.1
-    });
-  } catch (e) {
-    console.error("[browser] setProxy failed:", e.message);
-  }
+  // Route the window through our local proxy. Note: <webview> uses an
+  // independent session by default, so we must also set proxy on the webview's
+  // session when it attaches (via did-attach-webview). proxyBypassRules is
+  // empty string — we do NOT bypass loopback because our proxy lives on 127.0.0.1.
+  const proxyConfig = {
+    proxyRules: `http=127.0.0.1:${proxyPort};https=127.0.0.1:${proxyPort}`,
+    proxyBypassRules: "<-loopback>",
+  };
+  try { await win.webContents.session.setProxy(proxyConfig); }
+  catch (e) { console.error("[browser] window setProxy failed:", e.message); }
+
+  // Configure webview session as soon as it attaches
+  win.webContents.on("did-attach-webview", (_e, wvContents) => {
+    try {
+      wvContents.session.setProxy(proxyConfig).catch(err =>
+        console.error("[browser] webview setProxy failed:", err.message));
+    } catch (e) {
+      console.error("[browser] did-attach-webview handler:", e.message);
+    }
+  });
 
   const cachedBrowser = path.join(UI_CACHE_DIR, "browser.html");
   const browserBase = fs.existsSync(cachedBrowser) ? `file://${cachedBrowser}` : CLOUD_URL + "browser.html";
