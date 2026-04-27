@@ -61,11 +61,12 @@ function connect() {
   ws.on("open", () => {
     console.log("Connected.");
     reconnectDelay = 1000;
-    // Keep-alive ping every 30s to prevent Cloudflare idle timeout
+    // Keep-alive ping every 25s to prevent Cloudflare 30s idle timeout.
+    // Must be <30s; 25s gives 5s safety margin.
     const pingInterval = setInterval(() => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
       else clearInterval(pingInterval);
-    }, 30000);
+    }, 25000);
     ws.on("close", () => clearInterval(pingInterval));
   });
 
