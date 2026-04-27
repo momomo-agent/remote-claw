@@ -197,8 +197,8 @@
     showOverlay(`Connecting to ${device || 'local'}:${port}…`, false, true);
 
     try {
-      // Ask main to (re)start proxy on the requested remote port
-      const result = await window.electronAPI.invoke('browser-start-proxy', { device, port });
+      // Ask main to ensure an app-level proxy for (device, remotePort)
+      const result = await window.electronAPI.invoke('proxy-ensure', { device, remotePort: port, kind: 'browser' });
       if (!result || result.error) throw new Error(result?.error || 'proxy failed');
       proxyBase = result.url;
       currentPort = port;

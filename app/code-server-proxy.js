@@ -15,22 +15,28 @@ const crypto = require("crypto");
  * @param {string} opts.device - Target device name
  * @param {number} [opts.remotePort=8080] - code-server port on remote device
  */
-function startCodeServerProxy({ server, token, device, remotePort = 8080 }) {
+function startCodeServerProxy({ server, token, device, remotePort = 8080, onStateChange }) {
   const WebSocket = require("ws");
   const pendingRequests = new Map(); // reqId -> { res, isWs }
   let ws = null;
   let wsReady = false;
+  let everConnected = false;
+  let closed = false;
   const wsQueue = []; // messages queued before WS ready
+  function emit() { try { onStateChange && onStateChange({ connected: wsReady, everConnected, closed }); } catch {} }
 
   // Connect to relay as a "client" device (app-<random>)
   const clientName = `app-${crypto.randomBytes(3).toString("hex")}`;
   const wsUrl = `${server}/ws?device=${encodeURIComponent(clientName)}&token=${encodeURIComponent(token)}&cap=proxy`;
 
   function connectWs() {
+    if (closed) return;
     ws = new WebSocket(wsUrl);
     ws.on("open", () => {
       wsReady = true;
+      everConnected = true;
       while (wsQueue.length) ws.send(wsQueue.shift());
+      emit();
     });
     ws.on("message", (data) => {
       try {
@@ -43,7 +49,8 @@ function startCodeServerProxy({ server, token, device, remotePort = 8080 }) {
     });
     ws.on("close", () => {
       wsReady = false;
-      setTimeout(connectWs, 2000);
+      emit();
+      if (!closed) setTimeout(connectWs, 2000);
     });
     ws.on("error", () => {});
   }
@@ -187,13 +194,18 @@ function startCodeServerProxy({ server, token, device, remotePort = 8080 }) {
       resolve({
         port,
         url: `http://127.0.0.1:${port}`,
+        get connected() { return wsReady; },
+        get everConnected() { return everConnected; },
         close: () => {
+          closed = true;
           clearInterval(keepalive);
           httpServer.close();
           if (ws) ws.close();
           for (const [, clientWs] of wsUpgrades) clientWs.close();
           wsUpgrades.clear();
           pendingRequests.clear();
+          wsReady = false;
+          emit();
         },
       });
     });

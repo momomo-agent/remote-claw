@@ -1,6 +1,6 @@
 // RemoteClaw Main Logic — hot-updatable via GitHub
 // App is a pure UI client. Daemon handles all command execution.
-const LOGIC_VERSION = "1.1.1";
+const LOGIC_VERSION = "1.1.2";
 const PKG_VERSION = "1.1.0"; // must match package.json — bump when deps change
 
 const { app, nativeImage, ipcMain } = require("electron");
@@ -539,11 +539,7 @@ ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
   return { ok: true };
 });
 
-ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
-  const { BrowserWindow, Notification } = require("electron");
-  const { startCodeServerProxy } = require(path.join(APP_DIR, "code-server-proxy"));
-  const remotePort = port || 8080;
-
+function getRelayConfig() {
   let server = "wss://remote.momomo.dev";
   let token = "";
   try {
@@ -551,6 +547,106 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
     server = cfg.server || server;
     token = cfg.token || "";
   } catch {}
+  return { server, token };
+}
+
+// ── App-level Proxy Manager ──
+// One proxy per (device, remotePort). Lives as long as the app. Shared across
+// all windows (Browser, VS Code, future apps). Re-used on repeat requests.
+const proxies = new Map(); // key="device|port" -> { proxy, device, remotePort, kind, createdAt, lastUsedAt, connected, everConnected }
+
+function proxyKey(device, remotePort) { return `${device || ""}|${remotePort}`; }
+
+function snapshotProxies() {
+  const out = [];
+  for (const [key, entry] of proxies) {
+    out.push({
+      key,
+      device: entry.device,
+      remotePort: entry.remotePort,
+      localPort: entry.proxy?.port,
+      url: entry.proxy?.url,
+      kind: entry.kind,
+      connected: !!entry.connected,
+      everConnected: !!entry.everConnected,
+      createdAt: entry.createdAt,
+      lastUsedAt: entry.lastUsedAt,
+      age: Date.now() - entry.createdAt,
+    });
+  }
+  return out;
+}
+
+function broadcastProxies() {
+  sendToRenderer("proxies-changed", snapshotProxies());
+}
+
+async function ensureProxy({ device, remotePort, kind }) {
+  const { startCodeServerProxy } = require(path.join(APP_DIR, "code-server-proxy"));
+  const key = proxyKey(device, remotePort);
+  const existing = proxies.get(key);
+  if (existing) {
+    existing.lastUsedAt = Date.now();
+    if (kind && !existing.kind.includes(kind)) existing.kind += `+${kind}`;
+    return existing;
+  }
+
+  const { server, token } = getRelayConfig();
+  const entry = {
+    device: device || "",
+    remotePort,
+    kind: kind || "generic",
+    createdAt: Date.now(),
+    lastUsedAt: Date.now(),
+    connected: false,
+    everConnected: false,
+    proxy: null,
+  };
+  entry.proxy = await startCodeServerProxy({
+    server, token, device, remotePort,
+    onStateChange: ({ connected, everConnected }) => {
+      entry.connected = connected;
+      entry.everConnected = everConnected;
+      broadcastProxies();
+    },
+  });
+  proxies.set(key, entry);
+  broadcastProxies();
+  return entry;
+}
+
+function closeProxy(key) {
+  const entry = proxies.get(key);
+  if (!entry) return false;
+  try { entry.proxy?.close(); } catch {}
+  proxies.delete(key);
+  broadcastProxies();
+  return true;
+}
+
+function closeAllProxies() {
+  for (const [key, entry] of proxies) {
+    try { entry.proxy?.close(); } catch {}
+  }
+  proxies.clear();
+}
+
+app.on("before-quit", closeAllProxies);
+
+ipcMain.handle("proxy-list", () => snapshotProxies());
+ipcMain.handle("proxy-close", (_, { key }) => ({ ok: closeProxy(key) }));
+ipcMain.handle("proxy-ensure", async (_, { device, remotePort, kind }) => {
+  try {
+    const entry = await ensureProxy({ device, remotePort: parseInt(remotePort, 10), kind });
+    return { ok: true, url: entry.proxy.url, localPort: entry.proxy.port, connected: entry.connected };
+  } catch (e) {
+    return { error: e.message || String(e) };
+  }
+});
+
+ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
+  const { BrowserWindow, Notification } = require("electron");
+  const remotePort = port || 8080;
 
   try {
     // Start code-server on remote device if not already running
@@ -563,8 +659,8 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
       }
     }
 
-    const proxy = await startCodeServerProxy({ server, token, device, remotePort });
-    const codeUrl = proxy.url + (folder ? `/?folder=${encodeURIComponent(folder)}` : "");
+    const entry = await ensureProxy({ device, remotePort, kind: "vscode" });
+    const codeUrl = entry.proxy.url + (folder ? `/?folder=${encodeURIComponent(folder)}` : "");
 
     const win = new BrowserWindow({
       width: 1280, height: 800, minWidth: 800, minHeight: 600,
@@ -575,7 +671,7 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
       webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
     });
     win.loadURL(codeUrl);
-    win.on("closed", () => proxy.close());
+    // NOTE: proxy is app-scoped now — do not close on window close
     trackIndependentWindow(win);
     return { ok: true };
   } catch (e) {
@@ -583,20 +679,6 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
     return { error: e.message };
   }
 });
-
-// Registry of browser windows — one proxy per window, can be re-pointed to different remote ports
-const browserProxies = new WeakMap(); // win -> { proxy, device, remotePort }
-
-function getRelayConfig() {
-  let server = "wss://remote.momomo.dev";
-  let token = "";
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".remoteclaw", "config.json"), "utf-8"));
-    server = cfg.server || server;
-    token = cfg.token || "";
-  } catch {}
-  return { server, token };
-}
 
 ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
   const { BrowserWindow } = require("electron");
@@ -626,39 +708,12 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
   fileUrl.searchParams.set("path", initialPath);
   win.loadURL(fileUrl.toString());
 
-  win.on("closed", () => {
-    const entry = browserProxies.get(win);
-    if (entry?.proxy) { try { entry.proxy.close(); } catch {} }
-    browserProxies.delete(win);
-  });
+  // Eagerly ensure proxy (so renderer sees connected state sooner)
+  ensureProxy({ device, remotePort, kind: "browser" }).catch(() => {});
+
+  // Proxy lives as long as the app, not the window.
   trackIndependentWindow(win);
   return { ok: true };
-});
-
-// Renderer calls this when user navigates to a new remote port — (re)start proxy and return local URL.
-ipcMain.handle("browser-start-proxy", async (evt, { device, port }) => {
-  const { BrowserWindow } = require("electron");
-  const { startCodeServerProxy } = require(path.join(APP_DIR, "code-server-proxy"));
-  const win = BrowserWindow.fromWebContents(evt.sender);
-  if (!win) return { error: "no window" };
-
-  const remotePort = parseInt(port, 10) || 3000;
-  const existing = browserProxies.get(win);
-  if (existing && existing.remotePort === remotePort && existing.proxy) {
-    return { ok: true, url: existing.proxy.url, reused: true };
-  }
-
-  // Close previous proxy if pointing to a different port
-  if (existing?.proxy) { try { existing.proxy.close(); } catch {} }
-
-  try {
-    const { server, token } = getRelayConfig();
-    const proxy = await startCodeServerProxy({ server, token, device, remotePort });
-    browserProxies.set(win, { proxy, device, remotePort });
-    return { ok: true, url: proxy.url };
-  } catch (e) {
-    return { error: e.message || String(e) };
-  }
 });
 
 // ── IPC: Clipboard ──
