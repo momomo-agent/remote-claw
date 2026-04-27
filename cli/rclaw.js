@@ -228,9 +228,25 @@ async function pushFile(localPath, target) {
   });
 
   if (sourceDevice) {
+    const absPath = path.resolve(localPath);
+    // Source == target: relay refuses to loop messages to the same socket,
+    // so take a shell shortcut and cp directly on the remote box.
+    if (sourceDevice.name === device) {
+      console.log(`  same device — cp via shell`);
+      const quotedSrc = absPath.replace(/'/g, "'\\''");
+      const quotedDst = remotePath.replace(/'/g, "'\\''");
+      const { data } = await api("POST", "/exec", {
+        device: sourceDevice.name,
+        command: `mkdir -p "$(dirname '${quotedDst}')" && cp '${quotedSrc}' '${quotedDst}' && ls -la '${quotedDst}'`,
+        oneshot: true, timeout: 60000,
+      });
+      if (data.stdout) process.stdout.write(data.stdout);
+      if (data.stderr) process.stderr.write(data.stderr);
+      if (data.exitCode === 0) console.log("  done."); else { console.error(`  failed (exit ${data.exitCode})`); process.exit(1); }
+      return;
+    }
     // Tell source daemon to send file via WS
     console.log(`  via ${sourceDevice.name} -> WS relay -> ${device}`);
-    const absPath = path.resolve(localPath);
     const { data } = await api("POST", "/exec", {
       device: sourceDevice.name,
       command: `__RCLAW_SEND__ ${device} ${absPath} ${remotePath}`,
@@ -269,6 +285,21 @@ async function pullFile(source, localPath) {
   if (!localDevice) { console.error("Local daemon not found. Make sure daemon is running."); process.exit(1); }
 
   const absPath = path.resolve(localPath);
+  // Source == target: cp directly via shell (relay drops loopback messages).
+  if (localDevice.name === device) {
+    console.log(`  same device — cp via shell`);
+    const qs = remotePath.replace(/'/g, "'\\''");
+    const qd = absPath.replace(/'/g, "'\\''");
+    const { data } = await api("POST", "/exec", {
+      device,
+      command: `mkdir -p "$(dirname '${qd}')" && cp '${qs}' '${qd}' && ls -la '${qd}'`,
+      oneshot: true, timeout: 60000,
+    });
+    if (data.stdout) process.stdout.write(data.stdout);
+    if (data.stderr) process.stderr.write(data.stderr);
+    if (data.exitCode === 0) console.log("  done."); else { console.error(`  failed (exit ${data.exitCode})`); process.exit(1); }
+    return;
+  }
   // Tell remote device to send file to us
   const { data } = await api("POST", "/exec", {
     device,

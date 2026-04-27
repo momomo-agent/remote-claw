@@ -290,27 +290,31 @@ function handleShellOpen(msg) {
 
 function handleShellInput(msg) {
   const session = shellSessions.get(msg.sessionId);
-  if (!session) return;
+  if (!session) {
+    // Client is using a stale sessionId (daemon restarted, session expired,
+    // etc). Tell the client so it can spawn a fresh session instead of
+    // silently dropping keystrokes into the void.
+    wsSend({ type: "shell-exit", sessionId: msg.sessionId, exitCode: -1, error: "session not found", to: msg.from });
+    return;
+  }
   resetShellIdle(msg.sessionId, session);
   session.pty.write(Buffer.from(msg.data, "base64").toString());
 }
 
 function handleShellResize(msg) {
-  const session = shellSessions.get(msg.sessionId);
-  if (!session) return;
-  // Defensive: cols/rows may be 0/undefined if client sent before xterm fit().
-  // node-pty.resize(0, 0) throws, killing the surrounding try/catch but
-  // leaving the pty in an undefined state (it still runs & buffers data).
-  const cols = Number.isInteger(msg.cols) && msg.cols > 0 ? msg.cols : null;
-  const rows = Number.isInteger(msg.rows) && msg.rows > 0 ? msg.rows : null;
-  if (cols == null || rows == null) {
-    console.log(`[shell] resize skipped: bad dims cols=${msg.cols} rows=${msg.rows} sid=${msg.sessionId}`);
-    return;
-  }
   try {
+    const session = shellSessions.get(msg.sessionId);
+    if (!session || !session.pty) return;
+    // node-pty's native binding checks (cols > 0 && rows > 0) and otherwise
+    // throws "Usage: pty.resize(fd, cols, rows)" from C++ — even though the
+    // JS wrapper signature is .resize(cols, rows). Normalize to safe values.
+    let cols = Number.isInteger(msg.cols) ? msg.cols : 0;
+    let rows = Number.isInteger(msg.rows) ? msg.rows : 0;
+    if (cols <= 0) cols = 80;
+    if (rows <= 0) rows = 24;
     session.pty.resize(cols, rows);
   } catch (e) {
-    console.log(`[shell] resize error: ${e.message} sid=${msg.sessionId}`);
+    console.log(`[shell] resize error: ${e.message} sid=${msg.sessionId} cols=${msg.cols} rows=${msg.rows}`);
   }
 }
 
@@ -368,6 +372,8 @@ function handleScreenStop(msg) {
 }
 
 let captureInFlight = false;
+const captureErrorLogged = new Set();
+const captureStartedLogged = new Set();
 
 function captureAndSend(sessionId, to, quality) {
   if (captureInFlight) return; // skip frame if previous still in flight
@@ -379,10 +385,24 @@ function captureAndSend(sessionId, to, quality) {
     env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
     timeout: 5000,
   });
+  if (!captureStartedLogged.has(sessionId)) {
+    captureStartedLogged.add(sessionId);
+    console.log(`[screen] spawn screencapture pid=${proc.pid} tmp=${tmpFile}`);
+  }
 
+  let stderrBuf = "";
+  proc.stderr?.on("data", d => { stderrBuf += d.toString(); });
   proc.on("close", (code) => {
     captureInFlight = false;
-    if (code !== 0) return;
+    if (code !== 0) {
+      // Don't spam — log once per session when capture fails.
+      if (!captureErrorLogged.has(sessionId)) {
+        captureErrorLogged.add(sessionId);
+        console.log(`[screen] capture failed sid=${sessionId} code=${code} stderr=${stderrBuf.trim().slice(0, 200)}`);
+      }
+      return;
+    }
+    captureErrorLogged.delete(sessionId);
     try {
       // Resize to max 1280 width for bandwidth, using sips (built-in macOS)
       const { execSync } = require("child_process");
@@ -396,6 +416,16 @@ function captureAndSend(sessionId, to, quality) {
       }
 
       const buf = fs.readFileSync(tmpFile);
+      if (buf.length < 100) {
+        // screencapture silently produces empty files when Screen Recording
+        // permission is missing (returns exit code 0). Detect and nudge user.
+        if (!captureErrorLogged.has(sessionId)) {
+          captureErrorLogged.add(sessionId);
+          console.log(`[screen] empty capture sid=${sessionId} — grant "Screen Recording" permission in System Settings > Privacy`);
+        }
+        fs.unlinkSync(tmpFile);
+        return;
+      }
       const b64 = buf.toString("base64");
       wsSend({
         type: "screen-frame",
@@ -411,7 +441,13 @@ function captureAndSend(sessionId, to, quality) {
     }
   });
 
-  proc.on("error", () => { captureInFlight = false; });
+  proc.on("error", (e) => {
+    captureInFlight = false;
+    if (!captureErrorLogged.has(sessionId)) {
+      captureErrorLogged.add(sessionId);
+      console.log(`[screen] spawn error sid=${sessionId}: ${e.message}`);
+    }
+  });
 }
 
 function handleScreenInput(msg) {
