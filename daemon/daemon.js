@@ -28,7 +28,7 @@ function getDeviceName() {
 }
 
 const DEFAULT_CONFIG = {
-  server: "wss://remote.momomo.dev",
+  server: "wss://relay.momomo.dev",
   token: "CHANGE_ME",
 };
 
@@ -714,39 +714,55 @@ function handleTunnelHttpReq(reqId, peer, payload) {
 
 // ── Binary TCP (HTTPS CONNECT tunneling for Browser mode A) ──
 function handleTunnelTcpOpen(reqId, peer, payload) {
+  const openedAt = Date.now();
   let hdr;
   try { hdr = JSON.parse(Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength).toString("utf-8") || "{}"); }
   catch (e) { return sendFrame(tunnel.OP.TCP_CLOSE, reqId, peer, Buffer.from("bad open: " + e.message)); }
   const net = require("net");
   const socket = net.connect({ host: hdr.host, port: hdr.port }, () => {
-    // Notify Electron that connect succeeded by sending empty TCP_DATA is ambiguous;
-    // let's just wait for data. Browsers open their first byte after CONNECT 200,
-    // which we emit from the Electron proxy side.
+    const dt = Date.now() - openedAt;
+    console.log(`[tcp] connected reqId=${reqId} host=${hdr.host}:${hdr.port} in ${dt}ms`);
   });
   socket.setNoDelay(true);
-  tunnelTcpSessions.set(reqId, socket);
-  socket.on("data", (chunk) => sendFrame(tunnel.OP.TCP_DATA, reqId, peer, chunk));
+  tunnelTcpSessions.set(reqId, { socket, openedAt, host: hdr.host, port: hdr.port, bytesIn: 0, bytesOut: 0, firstDataAt: 0 });
+  socket.on("data", (chunk) => {
+    const sess = tunnelTcpSessions.get(reqId);
+    if (sess) {
+      sess.bytesIn += chunk.length;
+      if (!sess.firstDataAt) {
+        sess.firstDataAt = Date.now();
+        console.log(`[tcp] first-data reqId=${reqId} host=${hdr.host} after=${sess.firstDataAt - openedAt}ms bytes=${chunk.length}`);
+      }
+    }
+    sendFrame(tunnel.OP.TCP_DATA, reqId, peer, chunk);
+  });
   socket.on("close", () => {
+    const sess = tunnelTcpSessions.get(reqId);
+    if (sess) {
+      const dt = Date.now() - openedAt;
+      console.log(`[tcp] close reqId=${reqId} host=${hdr.host} lifetime=${dt}ms in=${sess.bytesIn} out=${sess.bytesOut}`);
+    }
     tunnelTcpSessions.delete(reqId);
     sendFrame(tunnel.OP.TCP_CLOSE, reqId, peer, Buffer.alloc(0));
   });
   socket.on("error", (e) => {
-    // `close` will still fire afterwards
+    console.log(`[tcp] error reqId=${reqId} host=${hdr.host}: ${e.message}`);
     sendFrame(tunnel.OP.TCP_CLOSE, reqId, peer, Buffer.from(e.message));
   });
 }
 
 function handleTunnelTcpData(reqId, peer, payload) {
-  const socket = tunnelTcpSessions.get(reqId);
-  if (socket && !socket.destroyed) {
-    socket.write(Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength));
+  const sess = tunnelTcpSessions.get(reqId);
+  if (sess && sess.socket && !sess.socket.destroyed) {
+    sess.bytesOut += payload.byteLength;
+    sess.socket.write(Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength));
   }
 }
 
 function handleTunnelTcpClose(reqId, peer, payload) {
-  const socket = tunnelTcpSessions.get(reqId);
-  if (socket) {
-    try { socket.end(); } catch {}
+  const sess = tunnelTcpSessions.get(reqId);
+  if (sess && sess.socket) {
+    try { sess.socket.end(); } catch {}
     tunnelTcpSessions.delete(reqId);
   }
 }

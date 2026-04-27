@@ -97,7 +97,7 @@ const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 function loadConfig() {
   if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
   if (!fs.existsSync(CONFIG_PATH)) {
-    const defaults = { server: "wss://remote.momomo.dev", token: "CHANGE_ME" };
+    const defaults = { server: "wss://relay.momomo.dev", token: "CHANGE_ME" };
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2));
   }
   return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
@@ -604,7 +604,7 @@ ipcMain.handle("open-editor", async (_, { dir, file, device, title }) => {
 });
 
 function getRelayConfig() {
-  let server = "wss://remote.momomo.dev";
+  let server = "wss://relay.momomo.dev";
   let token = "";
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".remoteclaw", "config.json"), "utf-8"));

@@ -124,7 +124,7 @@ function renderSettings() {
     <div class="settings">
       <div class="settings-group">
         <div class="settings-label">Server</div>
-        <input class="settings-input" id="s-server" value="${escHtml(state.configRaw?.server || '')}" placeholder="wss://remote.momomo.dev" />
+        <input class="settings-input" id="s-server" value="${escHtml(state.configRaw?.server || '')}" placeholder="wss://relay.momomo.dev" />
       </div>
       <div class="settings-group">
         <div class="settings-label">Token</div>
@@ -342,7 +342,7 @@ function bindEvents() {
   const saveBtn = document.getElementById("s-save");
   if (saveBtn) saveBtn.addEventListener("click", async () => {
     const cfg = {
-      server: document.getElementById("s-server").value.trim() || "wss://remote.momomo.dev",
+      server: document.getElementById("s-server").value.trim() || "wss://relay.momomo.dev",
       token: document.getElementById("s-token").value.trim(),
     };
     const dn = document.getElementById("s-device").value.trim();

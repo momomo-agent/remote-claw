@@ -25,7 +25,7 @@ export default defineComponent({
     async function save() {
       saving.value = true
       const cfg = {
-        server: server.value.trim() || 'wss://remote.momomo.dev',
+        server: server.value.trim() || 'wss://relay.momomo.dev',
         token: token.value.trim(),
       }
       const dn = deviceName.value.trim()
@@ -74,7 +74,7 @@ export default defineComponent({
         h('input', {
           class: 'settings-input',
           value: server.value,
-          placeholder: 'wss://remote.momomo.dev',
+          placeholder: 'wss://relay.momomo.dev',
           onInput: (e) => { server.value = e.target.value },
         }),
         h('div', { class: 'settings-label' }, 'Token'),
