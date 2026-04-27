@@ -1,6 +1,6 @@
 // RemoteClaw Main Logic — hot-updatable via GitHub
 // App is a pure UI client. Daemon handles all command execution.
-const LOGIC_VERSION = "1.1.2";
+const LOGIC_VERSION = "1.1.3";
 const PKG_VERSION = "1.1.0"; // must match package.json — bump when deps change
 
 const { app, nativeImage, ipcMain } = require("electron");
@@ -639,6 +639,15 @@ ipcMain.handle("proxy-ensure", async (_, { device, remotePort, kind }) => {
   try {
     const entry = await ensureProxy({ device, remotePort: parseInt(remotePort, 10), kind });
     return { ok: true, url: entry.proxy.url, localPort: entry.proxy.port, connected: entry.connected };
+  } catch (e) {
+    return { error: e.message || String(e) };
+  }
+});
+// Back-compat: older browser.html UI cache may still call this channel.
+ipcMain.handle("browser-start-proxy", async (_, { device, port }) => {
+  try {
+    const entry = await ensureProxy({ device, remotePort: parseInt(port, 10) || 3000, kind: "browser" });
+    return { ok: true, url: entry.proxy.url };
   } catch (e) {
     return { error: e.message || String(e) };
   }
