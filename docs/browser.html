@@ -55,17 +55,17 @@
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 0 10px;
+    padding: 0 12px;
     height: 28px;
     gap: 8px;
   }
   .url-bar:focus-within { border-color: var(--accent); }
-  .url-prefix {
+  .url-lock {
     color: var(--fg-dim);
     font-size: 11px;
-    font-family: ui-monospace, Menlo, monospace;
     user-select: none;
   }
+  .url-lock.secure { color: #22c55e; }
   .url-input {
     flex: 1;
     background: transparent;
@@ -73,7 +73,6 @@
     outline: none;
     color: var(--fg);
     font-size: 12px;
-    font-family: ui-monospace, Menlo, monospace;
     padding: 0;
   }
 
@@ -82,7 +81,15 @@
     font-size: 11px;
     padding: 0 8px;
     user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--fg-dim);
+  }
+  .status-dot.connected { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,.5); }
 
   .webview-container {
     flex: 1;
@@ -130,10 +137,13 @@
     <button class="nav-btn" id="forward" title="Forward" disabled>›</button>
     <button class="nav-btn" id="reload" title="Reload">⟳</button>
     <div class="url-bar">
-      <span class="url-prefix" id="urlPrefix">localhost:</span>
-      <input class="url-input" id="url" type="text" spellcheck="false" autocomplete="off" placeholder="3000/">
+      <span class="url-lock" id="urlLock">🌐</span>
+      <input class="url-input" id="url" type="text" spellcheck="false" autocomplete="off" placeholder="Enter URL or search">
     </div>
-    <span class="device-label" id="deviceLabel"></span>
+    <span class="device-label">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="deviceLabel"></span>
+    </span>
   </div>
   <div class="webview-container">
     <webview id="wv" allowpopups></webview>
@@ -146,10 +156,9 @@
 <script>
   const qs = new URLSearchParams(location.search);
   const device = qs.get('device') || '';
-  const initialPort = parseInt(qs.get('port') || '3000', 10);
-  const initialPath = qs.get('path') || '/';
+  const initialUrl = qs.get('url') || 'http://localhost:3000/';
 
-  document.getElementById('deviceLabel').textContent = device ? `→ ${device}` : '';
+  document.getElementById('deviceLabel').textContent = device ? `via ${device}` : 'local';
   document.title = `Browser — ${device || 'local'}`;
 
   const wv = document.getElementById('wv');
@@ -157,28 +166,33 @@
   const fwdBtn = document.getElementById('forward');
   const reloadBtn = document.getElementById('reload');
   const urlInput = document.getElementById('url');
+  const urlLock = document.getElementById('urlLock');
+  const statusDot = document.getElementById('statusDot');
   const overlay = document.getElementById('overlay');
   const overlayText = document.getElementById('overlayText');
   const spinner = document.getElementById('spinner');
 
-  // State: current proxy info (port-scoped on the local side)
-  let currentPort = initialPort;
-  let proxyBase = null; // http://127.0.0.1:<localPort>
-  let navigating = false;
   let userEditing = false;
 
-  // Parse "port/path" from the URL input (e.g. "3000/foo", "8080", ":8080/foo")
-  function parseBar(text) {
-    const raw = (text || '').trim();
-    const m = raw.match(/^:?(\d+)?(\/.*)?$/);
-    if (!m) return null;
-    const p = m[1] ? parseInt(m[1], 10) : currentPort;
-    const path = m[2] || '/';
-    return { port: p, path };
-  }
-
-  function formatBar(port, path) {
-    return `${port}${path || '/'}`;
+  // Parse a user-entered URL. Supports:
+  //   https://github.com      -> as-is
+  //   github.com              -> https://github.com
+  //   localhost:3000          -> http://localhost:3000
+  //   192.168.1.5:5173/app    -> http://192.168.1.5:5173/app
+  //   /search?q=foo           -> ddg search? for now just prepend https://duckduckgo.com
+  //   some words              -> duckduckgo search
+  function normalizeUrl(raw) {
+    const s = (raw || '').trim();
+    if (!s) return null;
+    if (/^https?:\/\//i.test(s)) return s;
+    // looks like a host (no spaces, has a dot or :port)
+    if (!/\s/.test(s) && (/\./.test(s) || /:\d+/.test(s) || s === 'localhost' || s.startsWith('localhost:'))) {
+      // private ranges + localhost default to http; public hosts get https
+      const isPrivate = /^(localhost|127\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/i.test(s);
+      return (isPrivate ? 'http://' : 'https://') + s;
+    }
+    // fallback: search
+    return 'https://duckduckgo.com/?q=' + encodeURIComponent(s);
   }
 
   function showOverlay(text, isError = false, showSpinner = false) {
@@ -187,63 +201,58 @@
     overlay.classList.toggle('error', isError);
     spinner.style.display = showSpinner ? 'inline-block' : 'none';
   }
-  function hideOverlay() {
-    overlay.classList.remove('show', 'error');
-  }
+  function hideOverlay() { overlay.classList.remove('show', 'error'); }
 
-  async function navigate(port, path) {
-    if (navigating) return;
-    navigating = true;
-    showOverlay(`Connecting to ${device || 'local'}:${port}…`, false, true);
-
-    try {
-      // Ask main to ensure an app-level proxy for (device, remotePort)
-      const result = await window.electronAPI.invoke('proxy-ensure', { device, remotePort: port, kind: 'browser' });
-      if (!result || result.error) throw new Error(result?.error || 'proxy failed');
-      proxyBase = result.url;
-      currentPort = port;
-      const target = proxyBase + (path.startsWith('/') ? path : '/' + path);
-      wv.src = target;
-    } catch (e) {
-      showOverlay(`Proxy failed: ${e.message}`, true, false);
-    } finally {
-      navigating = false;
+  function updateLock(url) {
+    if (url && url.startsWith('https://')) {
+      urlLock.textContent = '🔒';
+      urlLock.classList.add('secure');
+    } else {
+      urlLock.textContent = '🌐';
+      urlLock.classList.remove('secure');
     }
   }
 
-  // Sync url input from webview url
-  function updateBarFromWebview() {
-    if (userEditing || !proxyBase) return;
+  function updateBar() {
+    if (userEditing) return;
     try {
       const u = wv.getURL();
-      if (!u || !u.startsWith(proxyBase)) return;
-      const path = u.slice(proxyBase.length) || '/';
-      urlInput.value = formatBar(currentPort, path);
+      if (!u) return;
+      urlInput.value = u;
+      updateLock(u);
     } catch {}
   }
 
-  // Wire up nav buttons
+  async function refreshStatus() {
+    try {
+      const r = await window.electronAPI.invoke('browser-get-proxy-port', { device });
+      statusDot.classList.toggle('connected', !!r?.connected);
+    } catch {}
+  }
+
+  function navigate(raw) {
+    const url = normalizeUrl(raw);
+    if (!url) return;
+    updateLock(url);
+    wv.src = url;
+  }
+
+  // Nav buttons
   backBtn.addEventListener('click', () => { if (wv.canGoBack()) wv.goBack(); });
   fwdBtn.addEventListener('click', () => { if (wv.canGoForward()) wv.goForward(); });
   reloadBtn.addEventListener('click', () => wv.reload());
 
-  // URL input handling
+  // URL input
   urlInput.addEventListener('focus', () => { userEditing = true; urlInput.select(); });
-  urlInput.addEventListener('blur', () => { userEditing = false; updateBarFromWebview(); });
+  urlInput.addEventListener('blur', () => { userEditing = false; updateBar(); });
   urlInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const parsed = parseBar(urlInput.value);
-      if (!parsed) return;
       userEditing = false;
-      if (parsed.port !== currentPort) {
-        navigate(parsed.port, parsed.path);
-      } else if (proxyBase) {
-        wv.src = proxyBase + parsed.path;
-      }
+      navigate(urlInput.value);
       urlInput.blur();
     } else if (e.key === 'Escape') {
-      updateBarFromWebview();
+      updateBar();
       urlInput.blur();
     }
   });
@@ -252,23 +261,25 @@
   wv.addEventListener('did-start-loading', () => {
     reloadBtn.textContent = '×';
     reloadBtn.title = 'Stop';
+    showOverlay('Loading…', false, true);
   });
   wv.addEventListener('did-stop-loading', () => {
     reloadBtn.textContent = '⟳';
     reloadBtn.title = 'Reload';
     backBtn.disabled = !wv.canGoBack();
     fwdBtn.disabled = !wv.canGoForward();
-    updateBarFromWebview();
+    updateBar();
     hideOverlay();
   });
   wv.addEventListener('did-fail-load', (e) => {
-    // -3 = aborted (normal on nav redirects), ignore
-    if (e.errorCode === -3) return;
+    if (e.errorCode === -3) return; // aborted on redirect
     showOverlay(`Load failed: ${e.errorDescription || e.errorCode}`, true, false);
   });
   wv.addEventListener('page-title-updated', (e) => {
     document.title = `${e.title} — ${device || 'local'}`;
   });
+  wv.addEventListener('did-navigate', (e) => { urlInput.value = e.url; updateLock(e.url); });
+  wv.addEventListener('did-navigate-in-page', (e) => { urlInput.value = e.url; updateLock(e.url); });
 
   // Ctrl/Cmd+L focuses URL bar
   document.addEventListener('keydown', (e) => {
@@ -278,9 +289,12 @@
     }
   });
 
-  // Initial load
-  urlInput.value = formatBar(initialPort, initialPath);
-  navigate(initialPort, initialPath);
+  // Init
+  urlInput.value = initialUrl;
+  updateLock(initialUrl);
+  wv.src = initialUrl;
+  refreshStatus();
+  setInterval(refreshStatus, 3000);
 </script>
 </body>
 </html>

@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const WebSocket = require("ws");
+const tunnel = require("./tunnel-frame");
 let pty;
 try { pty = require("node-pty"); } catch { pty = null; }
 
@@ -68,7 +69,17 @@ function connect() {
     ws.on("close", () => clearInterval(pingInterval));
   });
 
-  ws.on("message", (data) => {
+  ws.on("message", (data, isBinary) => {
+    // Binary frame (new tunnel protocol)
+    if (isBinary) {
+      try {
+        const frame = tunnel.decode(data);
+        handleTunnelFrame(frame);
+      } catch (e) {
+        console.error("Bad binary frame:", e.message);
+      }
+      return;
+    }
     try {
       const msg = JSON.parse(data.toString());
       if (msg.type !== "pong") console.log(`[ws] recv: ${msg.type}${msg.sessionId ? ' sid=' + msg.sessionId : ''}`);
@@ -87,7 +98,7 @@ function connect() {
       if (msg.type === "screen-start") handleScreenStart(msg);
       if (msg.type === "screen-stop") handleScreenStop(msg);
       if (msg.type === "screen-input") handleScreenInput(msg);
-      // HTTP proxy (code-server tunnel)
+      // HTTP proxy (code-server tunnel, legacy JSON)
       if (msg.type === "http-proxy-request") handleHttpProxyRequest(msg);
       if (msg.type === "ws-proxy-open") handleWsProxyOpen(msg);
       if (msg.type === "ws-proxy-data") handleWsProxyData(msg);
@@ -512,6 +523,190 @@ function handleWsProxyClose(msg) {
   if (localWs) {
     localWs.close();
     proxyWsSessions.delete(msg.reqId);
+  }
+}
+
+// ── Binary Tunnel Protocol ──
+// Binary sessions keyed by reqId. Electron is the initiator; daemon is the
+// responder. One reqId = one HTTP request, or one WS, or one TCP stream.
+
+const tunnelWsSessions = new Map();  // reqId -> WebSocket to a local service
+const tunnelTcpSessions = new Map(); // reqId -> net.Socket (for HTTPS CONNECT tunneling)
+
+function sendFrame(opcode, reqId, peer, payload) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const buf = tunnel.encode(opcode, reqId, peer, payload || Buffer.alloc(0));
+  ws.send(buf, { binary: true });
+}
+
+function handleTunnelFrame(frame) {
+  const { opcode, reqId, peer, payload } = frame;
+  // `peer` here is the source (relay rewrote it). We will reply to this peer.
+  switch (opcode) {
+    case tunnel.OP.HTTP_REQ: return handleTunnelHttpReq(reqId, peer, payload);
+    case tunnel.OP.TCP_OPEN: return handleTunnelTcpOpen(reqId, peer, payload);
+    case tunnel.OP.TCP_DATA: return handleTunnelTcpData(reqId, peer, payload);
+    case tunnel.OP.TCP_CLOSE: return handleTunnelTcpClose(reqId, peer, payload);
+    case tunnel.OP.WS_OPEN: return handleTunnelWsOpen(reqId, peer, payload);
+    case tunnel.OP.WS_DATA: return handleTunnelWsData(reqId, peer, payload);
+    case tunnel.OP.WS_CLOSE: return handleTunnelWsClose(reqId, peer, payload);
+    default:
+      console.log(`[tunnel] unknown opcode 0x${opcode.toString(16)} reqId=${reqId}`);
+  }
+}
+
+// ── Binary HTTP ──
+// Two modes:
+//   header.url absolute (http[s]://host[:port]/path) → universal proxy (Browser mode A)
+//   header.url relative (/path) + header.port → local-port proxy (code-server)
+function handleTunnelHttpReq(reqId, peer, payload) {
+  let parsed;
+  try { parsed = tunnel.splitJsonBody(payload); } catch (e) {
+    return sendFrame(tunnel.OP.HTTP_ERR, reqId, peer, Buffer.from("bad header: " + e.message));
+  }
+  const { header, body } = parsed;
+  const method = header.method || "GET";
+  const reqHeaders = { ...(header.headers || {}) };
+
+  let options, isHttps = false;
+  if (/^https?:\/\//i.test(header.url)) {
+    // Universal mode — absolute URL
+    let u;
+    try { u = new URL(header.url); } catch (e) {
+      return sendFrame(tunnel.OP.HTTP_ERR, reqId, peer, Buffer.from("bad url: " + e.message));
+    }
+    isHttps = u.protocol === "https:";
+    options = {
+      hostname: u.hostname,
+      port: u.port || (isHttps ? 443 : 80),
+      path: u.pathname + u.search,
+      method,
+      headers: reqHeaders,
+    };
+    // Rewrite Host header for target
+    options.headers["host"] = u.host;
+    delete options.headers["connection"];
+  } else {
+    // Local-port mode — code-server style
+    const targetPort = header.port || 8080;
+    options = {
+      hostname: "127.0.0.1",
+      port: targetPort,
+      path: header.url || "/",
+      method,
+      headers: reqHeaders,
+    };
+    delete options.headers["host"];
+    delete options.headers["connection"];
+    delete options.headers["upgrade"];
+    options.headers["host"] = `127.0.0.1:${targetPort}`;
+  }
+
+  const lib = isHttps ? require("https") : require("http");
+  const req = lib.request(options, (res) => {
+    const chunks = [];
+    res.on("data", (c) => chunks.push(c));
+    res.on("end", () => {
+      const respBody = Buffer.concat(chunks);
+      const respHeaders = { ...res.headers };
+      delete respHeaders["transfer-encoding"];
+      const out = tunnel.joinJsonBody({ status: res.statusCode, headers: respHeaders }, respBody);
+      sendFrame(tunnel.OP.HTTP_RESP, reqId, peer, out);
+    });
+  });
+  req.on("error", (e) => {
+    sendFrame(tunnel.OP.HTTP_ERR, reqId, peer, Buffer.from(e.message));
+  });
+  if (body && body.length) req.write(Buffer.from(body.buffer, body.byteOffset, body.byteLength));
+  req.end();
+}
+
+// ── Binary TCP (HTTPS CONNECT tunneling for Browser mode A) ──
+function handleTunnelTcpOpen(reqId, peer, payload) {
+  let hdr;
+  try { hdr = JSON.parse(Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength).toString("utf-8") || "{}"); }
+  catch (e) { return sendFrame(tunnel.OP.TCP_CLOSE, reqId, peer, Buffer.from("bad open: " + e.message)); }
+  const net = require("net");
+  const socket = net.connect({ host: hdr.host, port: hdr.port }, () => {
+    // Notify Electron that connect succeeded by sending empty TCP_DATA is ambiguous;
+    // let's just wait for data. Browsers open their first byte after CONNECT 200,
+    // which we emit from the Electron proxy side.
+  });
+  socket.setNoDelay(true);
+  tunnelTcpSessions.set(reqId, socket);
+  socket.on("data", (chunk) => sendFrame(tunnel.OP.TCP_DATA, reqId, peer, chunk));
+  socket.on("close", () => {
+    tunnelTcpSessions.delete(reqId);
+    sendFrame(tunnel.OP.TCP_CLOSE, reqId, peer, Buffer.alloc(0));
+  });
+  socket.on("error", (e) => {
+    // `close` will still fire afterwards
+    sendFrame(tunnel.OP.TCP_CLOSE, reqId, peer, Buffer.from(e.message));
+  });
+}
+
+function handleTunnelTcpData(reqId, peer, payload) {
+  const socket = tunnelTcpSessions.get(reqId);
+  if (socket && !socket.destroyed) {
+    socket.write(Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength));
+  }
+}
+
+function handleTunnelTcpClose(reqId, peer, payload) {
+  const socket = tunnelTcpSessions.get(reqId);
+  if (socket) {
+    try { socket.end(); } catch {}
+    tunnelTcpSessions.delete(reqId);
+  }
+}
+
+// ── Binary WebSocket (code-server internal WS) ──
+function handleTunnelWsOpen(reqId, peer, payload) {
+  let hdr;
+  try { hdr = JSON.parse(Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength).toString("utf-8") || "{}"); }
+  catch (e) { return sendFrame(tunnel.OP.WS_CLOSE, reqId, peer, Buffer.from("bad open: " + e.message)); }
+  const port = hdr.port || 8080;
+  const wsUrl = `ws://127.0.0.1:${port}${hdr.url || "/"}`;
+  const headers = {};
+  for (const [k, v] of Object.entries(hdr.headers || {})) {
+    const lk = k.toLowerCase();
+    if (["host", "upgrade", "connection", "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions"].includes(lk)) continue;
+    headers[k] = v;
+  }
+  const localWs = new WebSocket(wsUrl, { headers });
+  tunnelWsSessions.set(reqId, localWs);
+  localWs.on("message", (data, isBin) => {
+    const flags = isBin ? 0x01 : 0x00;
+    const dataBuf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    const out = Buffer.alloc(1 + dataBuf.length);
+    out[0] = flags;
+    dataBuf.copy(out, 1);
+    sendFrame(tunnel.OP.WS_DATA, reqId, peer, out);
+  });
+  localWs.on("close", (code) => {
+    tunnelWsSessions.delete(reqId);
+    const codeBuf = Buffer.alloc(2);
+    codeBuf.writeUInt16BE(code || 1000, 0);
+    sendFrame(tunnel.OP.WS_CLOSE, reqId, peer, codeBuf);
+  });
+  localWs.on("error", (e) => {
+    console.error(`[tunnel-ws] ${reqId}: ${e.message}`);
+  });
+}
+
+function handleTunnelWsData(reqId, peer, payload) {
+  const localWs = tunnelWsSessions.get(reqId);
+  if (!localWs || localWs.readyState !== WebSocket.OPEN) return;
+  const flags = payload[0] || 0;
+  const dataBytes = Buffer.from(payload.buffer, payload.byteOffset + 1, payload.byteLength - 1);
+  localWs.send(dataBytes, { binary: !!(flags & 0x01) });
+}
+
+function handleTunnelWsClose(reqId, peer, payload) {
+  const localWs = tunnelWsSessions.get(reqId);
+  if (localWs) {
+    try { localWs.close(); } catch {}
+    tunnelWsSessions.delete(reqId);
   }
 }
 

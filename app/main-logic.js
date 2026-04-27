@@ -1,6 +1,6 @@
 // RemoteClaw Main Logic — hot-updatable via GitHub
 // App is a pure UI client. Daemon handles all command execution.
-const LOGIC_VERSION = "1.1.3";
+const LOGIC_VERSION = "1.2.0";
 const PKG_VERSION = "1.1.0"; // must match package.json — bump when deps change
 
 const { app, nativeImage, ipcMain } = require("electron");
@@ -8,8 +8,72 @@ const { menubar } = require("menubar");
 const path = require("path");
 const { spawn, execSync } = require("child_process");
 const WebSocket = require("ws");
+const http = require("http");
+const net = require("net");
 const fs = require("fs");
 const os = require("os");
+const crypto = require("crypto");
+
+// ── Inline tunnel-frame codec ──
+// Binary frame for relay tunnel. See daemon/tunnel-frame.js for spec.
+//   0x00 uint8   opcode
+//   0x01 uint32  reqId (BE)
+//   0x05 uint8   peer_len
+//   0x06 bytes   peer utf-8
+//   ...  bytes   payload
+const TUN_OP = Object.freeze({
+  HTTP_REQ: 0x01, HTTP_RESP: 0x02, HTTP_ERR: 0x03,
+  TCP_OPEN: 0x10, TCP_DATA: 0x11, TCP_CLOSE: 0x12,
+  WS_OPEN: 0x20, WS_DATA: 0x21, WS_CLOSE: 0x22,
+});
+
+function tunEncode(opcode, reqId, peer, payload) {
+  const peerBytes = Buffer.from(peer || "", "utf-8");
+  const payloadBytes = payload instanceof Uint8Array
+    ? (Buffer.isBuffer(payload) ? payload : Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength))
+    : Buffer.from(payload || "");
+  const out = Buffer.alloc(6 + peerBytes.length + payloadBytes.length);
+  out[0] = opcode & 0xff;
+  out.writeUInt32BE(reqId >>> 0, 1);
+  out[5] = peerBytes.length & 0xff;
+  peerBytes.copy(out, 6);
+  payloadBytes.copy(out, 6 + peerBytes.length);
+  return out;
+}
+
+function tunDecode(buf) {
+  const u8 = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+  if (u8.length < 6) throw new Error("frame too short");
+  const opcode = u8[0];
+  const reqId = u8.readUInt32BE(1);
+  const peerLen = u8[5];
+  if (u8.length < 6 + peerLen) throw new Error("frame truncated");
+  const peer = u8.subarray(6, 6 + peerLen).toString("utf-8");
+  const payload = u8.subarray(6 + peerLen);
+  return { opcode, reqId, peer, payload };
+}
+
+function tunSplitJsonBody(payload) {
+  for (let i = 0; i < payload.length; i++) {
+    if (payload[i] === 0x0a) {
+      const hdr = JSON.parse(payload.subarray(0, i).toString("utf-8") || "{}");
+      return { header: hdr, body: payload.subarray(i + 1) };
+    }
+  }
+  return { header: JSON.parse(payload.toString("utf-8") || "{}"), body: Buffer.alloc(0) };
+}
+
+function tunJoinJsonBody(header, body) {
+  const hdr = Buffer.from(JSON.stringify(header), "utf-8");
+  const bodyBuf = body
+    ? (Buffer.isBuffer(body) ? body : Buffer.from(body.buffer ?? body, body.byteOffset ?? 0, body.byteLength ?? body.length))
+    : Buffer.alloc(0);
+  const out = Buffer.alloc(hdr.length + 1 + bodyBuf.length);
+  hdr.copy(out, 0);
+  out[hdr.length] = 0x0a;
+  bodyBuf.copy(out, hdr.length + 1);
+  return out;
+}
 
 // APP_DIR must point to the asar resources, not the OTA logic location
 const APP_DIR = app.getAppPath();
@@ -574,6 +638,21 @@ function snapshotProxies() {
       age: Date.now() - entry.createdAt,
     });
   }
+  for (const [key, entry] of universalProxies) {
+    out.push({
+      key: `u|${key}`,
+      device: entry.device,
+      remotePort: null,
+      localPort: entry.proxy?.port,
+      url: entry.proxy?.url,
+      kind: entry.kind,
+      connected: !!entry.connected,
+      everConnected: !!entry.everConnected,
+      createdAt: entry.createdAt,
+      lastUsedAt: entry.lastUsedAt,
+      age: Date.now() - entry.createdAt,
+    });
+  }
   return out;
 }
 
@@ -581,8 +660,195 @@ function broadcastProxies() {
   sendToRenderer("proxies-changed", snapshotProxies());
 }
 
+// ── Inline code-server proxy (binary tunnel) ──
+// Local HTTP server that forwards requests through the relay WS using the
+// binary tunnel protocol. Replaces the old app/code-server-proxy.js require
+// so everything hot-updates as part of main-logic.
+function startCodeServerProxy({ server, token, device, remotePort = 8080, onStateChange }) {
+  const pendingRequests = new Map(); // reqId -> { res }
+  const wsUpgrades = new Map();      // reqId -> client WebSocket (incoming upgrade)
+  let relayWs = null;
+  let wsReady = false;
+  let everConnected = false;
+  let closed = false;
+  const sendQueue = [];
+  function fireState() { try { onStateChange && onStateChange({ connected: wsReady, everConnected, closed }); } catch {} }
+  function sendRaw(buf) {
+    if (wsReady && relayWs?.readyState === 1) relayWs.send(buf, { binary: true });
+    else sendQueue.push(buf);
+  }
+  function sendFrame(opcode, reqId, payload) {
+    sendRaw(tunEncode(opcode, reqId, device || "", payload || Buffer.alloc(0)));
+  }
+
+  const clientName = `app-${crypto.randomBytes(3).toString("hex")}`;
+  const relayUrl = `${server}/ws?device=${encodeURIComponent(clientName)}&token=${encodeURIComponent(token)}&cap=proxy`;
+
+  function connectRelay() {
+    if (closed) return;
+    relayWs = new WebSocket(relayUrl);
+    relayWs.on("open", () => {
+      wsReady = true; everConnected = true;
+      while (sendQueue.length) relayWs.send(sendQueue.shift(), { binary: true });
+      fireState();
+    });
+    relayWs.on("message", (data, isBinary) => {
+      if (!isBinary) {
+        // Legacy JSON path (ignored; all proxy traffic is binary now)
+        return;
+      }
+      try {
+        const frame = tunDecode(data);
+        handleFrame(frame);
+      } catch (e) {
+        console.error("[proxy] bad frame:", e.message);
+      }
+    });
+    relayWs.on("close", () => {
+      wsReady = false;
+      fireState();
+      if (!closed) setTimeout(connectRelay, 2000);
+    });
+    relayWs.on("error", () => {});
+  }
+
+  function handleFrame(frame) {
+    const { opcode, reqId, payload } = frame;
+    switch (opcode) {
+      case TUN_OP.HTTP_RESP: {
+        const pending = pendingRequests.get(reqId);
+        if (!pending) return;
+        pendingRequests.delete(reqId);
+        const { header, body } = tunSplitJsonBody(payload);
+        const headers = header.headers || {};
+        delete headers["transfer-encoding"];
+        delete headers["connection"];
+        try {
+          pending.res.writeHead(header.status || 200, headers);
+          pending.res.end(body.length ? Buffer.from(body.buffer, body.byteOffset, body.byteLength) : undefined);
+        } catch (e) { /* client disconnected */ }
+        return;
+      }
+      case TUN_OP.HTTP_ERR: {
+        const pending = pendingRequests.get(reqId);
+        if (!pending) return;
+        pendingRequests.delete(reqId);
+        try {
+          if (!pending.res.headersSent) pending.res.writeHead(502, { "Content-Type": "text/plain" });
+          pending.res.end(`Proxy error: ${Buffer.from(payload).toString("utf-8") || "unknown"}`);
+        } catch {}
+        return;
+      }
+      case TUN_OP.WS_DATA: {
+        const clientWs = wsUpgrades.get(reqId);
+        if (!clientWs || clientWs.readyState !== 1) return;
+        const flags = payload[0] || 0;
+        const dataBytes = Buffer.from(payload.buffer, payload.byteOffset + 1, payload.byteLength - 1);
+        clientWs.send(dataBytes, { binary: !!(flags & 0x01) });
+        return;
+      }
+      case TUN_OP.WS_CLOSE: {
+        const clientWs = wsUpgrades.get(reqId);
+        if (clientWs) {
+          try { clientWs.close(payload.length >= 2 ? (payload[0] << 8 | payload[1]) : 1000); } catch {}
+          wsUpgrades.delete(reqId);
+        }
+        return;
+      }
+      case TUN_OP.TCP_DATA:
+      case TUN_OP.TCP_CLOSE:
+        // Used by universal HTTP proxy (commit 3). Dispatched via tcpHandlers map.
+        if (tcpHandlers.has(reqId)) tcpHandlers.get(reqId)(opcode, payload);
+        return;
+    }
+  }
+
+  // Local HTTP server (what BrowserWindow/webview loads)
+  const httpServer = http.createServer((req, res) => {
+    const reqId = nextReqId();
+    pendingRequests.set(reqId, { res });
+    const chunks = [];
+    req.on("data", c => chunks.push(c));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks);
+      const header = {
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        port: remotePort,
+      };
+      sendFrame(TUN_OP.HTTP_REQ, reqId, tunJoinJsonBody(header, body));
+    });
+    const tid = setTimeout(() => {
+      if (!pendingRequests.has(reqId)) return;
+      pendingRequests.delete(reqId);
+      try {
+        if (!res.headersSent) res.writeHead(504, { "Content-Type": "text/plain" });
+        res.end("Proxy timeout");
+      } catch {}
+    }, 30000);
+    res.on("close", () => clearTimeout(tid));
+  });
+
+  // WS upgrade (code-server uses WS for terminal/LSP)
+  const { Server: WSS } = require("ws");
+  const wss = new WSS({ noServer: true });
+  httpServer.on("upgrade", (req, socket, head) => {
+    wss.handleUpgrade(req, socket, head, (clientWs) => {
+      const reqId = nextReqId();
+      wsUpgrades.set(reqId, clientWs);
+      const header = { url: req.url, headers: req.headers, port: remotePort };
+      sendFrame(TUN_OP.WS_OPEN, reqId, Buffer.from(JSON.stringify(header), "utf-8"));
+      clientWs.on("message", (data, isBin) => {
+        const dataBuf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        const out = Buffer.alloc(1 + dataBuf.length);
+        out[0] = isBin ? 1 : 0;
+        dataBuf.copy(out, 1);
+        sendFrame(TUN_OP.WS_DATA, reqId, out);
+      });
+      clientWs.on("close", (code) => {
+        const codeBuf = Buffer.alloc(2);
+        codeBuf.writeUInt16BE(code || 1000, 0);
+        sendFrame(TUN_OP.WS_CLOSE, reqId, codeBuf);
+        wsUpgrades.delete(reqId);
+      });
+    });
+  });
+
+  return new Promise((resolve) => {
+    httpServer.listen(0, "127.0.0.1", () => {
+      const port = httpServer.address().port;
+      connectRelay();
+      const keepalive = setInterval(() => {
+        if (wsReady) relayWs.send(JSON.stringify({ type: "ping" })); // keepalive JSON is fine
+      }, 25000);
+      resolve({
+        port,
+        url: `http://127.0.0.1:${port}`,
+        get connected() { return wsReady; },
+        get everConnected() { return everConnected; },
+        close: () => {
+          closed = true;
+          clearInterval(keepalive);
+          try { httpServer.close(); } catch {}
+          if (relayWs) try { relayWs.close(); } catch {}
+          for (const [, clientWs] of wsUpgrades) try { clientWs.close(); } catch {}
+          wsUpgrades.clear();
+          pendingRequests.clear();
+          wsReady = false;
+          fireState();
+        },
+      });
+    });
+  });
+}
+
+// reqId allocator and dispatcher for TCP-mode handlers (commit 3 reuses these)
+let _nextReqId = 1;
+function nextReqId() { const id = _nextReqId; _nextReqId = (_nextReqId + 1) >>> 0 || 1; return id; }
+const tcpHandlers = new Map(); // reqId -> (opcode, payload) => void
+
 async function ensureProxy({ device, remotePort, kind }) {
-  const { startCodeServerProxy } = require(path.join(APP_DIR, "code-server-proxy"));
   const key = proxyKey(device, remotePort);
   const existing = proxies.get(key);
   if (existing) {
@@ -629,9 +895,206 @@ function closeAllProxies() {
     try { entry.proxy?.close(); } catch {}
   }
   proxies.clear();
+  for (const [key, entry] of universalProxies) {
+    try { entry.proxy?.close(); } catch {}
+  }
+  universalProxies.clear();
 }
 
 app.on("before-quit", closeAllProxies);
+
+// ── Universal HTTP/HTTPS Proxy (Browser Mode A) ──
+// One proxy per device. Electron BrowserWindow's session points to this as its
+// HTTP proxy. It turns every browser request/CONNECT into tunnel frames; the
+// device daemon performs the actual outbound request and streams bytes back.
+const universalProxies = new Map(); // device -> { proxy, createdAt, connected, everConnected }
+
+function startUniversalHttpProxy({ server, token, device, onStateChange }) {
+  const pendingHttp = new Map();  // reqId -> { res }
+  const tcpSockets = new Map();   // reqId -> client Socket (from browser)
+  let relayWs = null;
+  let wsReady = false;
+  let everConnected = false;
+  let closed = false;
+  const sendQueue = [];
+  function fireState() { try { onStateChange && onStateChange({ connected: wsReady, everConnected, closed }); } catch {} }
+  function sendRaw(buf) {
+    if (wsReady && relayWs?.readyState === 1) relayWs.send(buf, { binary: true });
+    else sendQueue.push(buf);
+  }
+  function sendFrame(opcode, reqId, payload) {
+    sendRaw(tunEncode(opcode, reqId, device || "", payload || Buffer.alloc(0)));
+  }
+
+  const clientName = `app-${crypto.randomBytes(3).toString("hex")}`;
+  const relayUrl = `${server}/ws?device=${encodeURIComponent(clientName)}&token=${encodeURIComponent(token)}&cap=browser-proxy`;
+
+  function connectRelay() {
+    if (closed) return;
+    relayWs = new WebSocket(relayUrl);
+    relayWs.on("open", () => {
+      wsReady = true; everConnected = true;
+      while (sendQueue.length) relayWs.send(sendQueue.shift(), { binary: true });
+      fireState();
+    });
+    relayWs.on("message", (data, isBinary) => {
+      if (!isBinary) return;
+      try { handleFrame(tunDecode(data)); }
+      catch (e) { console.error("[ubrowser] bad frame:", e.message); }
+    });
+    relayWs.on("close", () => {
+      wsReady = false;
+      fireState();
+      if (!closed) setTimeout(connectRelay, 2000);
+    });
+    relayWs.on("error", () => {});
+  }
+
+  function handleFrame(frame) {
+    const { opcode, reqId, payload } = frame;
+    switch (opcode) {
+      case TUN_OP.HTTP_RESP: {
+        const pending = pendingHttp.get(reqId);
+        if (!pending) return;
+        pendingHttp.delete(reqId);
+        const { header, body } = tunSplitJsonBody(payload);
+        const headers = header.headers || {};
+        delete headers["transfer-encoding"];
+        delete headers["connection"];
+        try {
+          pending.res.writeHead(header.status || 200, headers);
+          pending.res.end(body.length ? Buffer.from(body.buffer, body.byteOffset, body.byteLength) : undefined);
+        } catch {}
+        return;
+      }
+      case TUN_OP.HTTP_ERR: {
+        const pending = pendingHttp.get(reqId);
+        if (!pending) return;
+        pendingHttp.delete(reqId);
+        try {
+          if (!pending.res.headersSent) pending.res.writeHead(502, { "Content-Type": "text/plain" });
+          pending.res.end(`Proxy error: ${Buffer.from(payload).toString("utf-8") || "unknown"}`);
+        } catch {}
+        return;
+      }
+      case TUN_OP.TCP_DATA: {
+        const socket = tcpSockets.get(reqId);
+        if (socket && !socket.destroyed) {
+          socket.write(Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength));
+        }
+        return;
+      }
+      case TUN_OP.TCP_CLOSE: {
+        const socket = tcpSockets.get(reqId);
+        if (socket) {
+          try { socket.end(); } catch {}
+          tcpSockets.delete(reqId);
+        }
+        return;
+      }
+    }
+  }
+
+  // Local HTTP proxy server. BrowserWindow.session.setProxy() routes every
+  // HTTP request and HTTPS CONNECT here.
+  const proxyServer = http.createServer((req, res) => {
+    // req.url is an absolute URL (http://host/path) because Chromium is using
+    // us as an HTTP proxy.
+    const reqId = nextReqId();
+    pendingHttp.set(reqId, { res });
+    const chunks = [];
+    req.on("data", c => chunks.push(c));
+    req.on("end", () => {
+      const header = {
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+      };
+      sendFrame(TUN_OP.HTTP_REQ, reqId, tunJoinJsonBody(header, Buffer.concat(chunks)));
+    });
+    const tid = setTimeout(() => {
+      if (!pendingHttp.has(reqId)) return;
+      pendingHttp.delete(reqId);
+      try {
+        if (!res.headersSent) res.writeHead(504, { "Content-Type": "text/plain" });
+        res.end("Proxy timeout");
+      } catch {}
+    }, 60000);
+    res.on("close", () => clearTimeout(tid));
+  });
+
+  // HTTPS CONNECT handling
+  proxyServer.on("connect", (req, clientSocket, head) => {
+    const [host, portStr] = (req.url || "").split(":");
+    const port = parseInt(portStr, 10) || 443;
+    if (!host) { try { clientSocket.destroy(); } catch {} return; }
+    const reqId = nextReqId();
+    tcpSockets.set(reqId, clientSocket);
+    clientSocket.setNoDelay(true);
+    clientSocket.on("data", (chunk) => sendFrame(TUN_OP.TCP_DATA, reqId, chunk));
+    clientSocket.on("end", () => { sendFrame(TUN_OP.TCP_CLOSE, reqId, Buffer.alloc(0)); tcpSockets.delete(reqId); });
+    clientSocket.on("error", () => { try { clientSocket.destroy(); } catch {} tcpSockets.delete(reqId); });
+    // Inform the browser that the tunnel is ready. The daemon-side connect()
+    // is optimistic; any failure surfaces as TCP_CLOSE which ends clientSocket.
+    sendFrame(TUN_OP.TCP_OPEN, reqId, Buffer.from(JSON.stringify({ host, port }), "utf-8"));
+    try { clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n"); } catch {}
+    if (head && head.length) sendFrame(TUN_OP.TCP_DATA, reqId, head);
+  });
+
+  return new Promise((resolve) => {
+    proxyServer.listen(0, "127.0.0.1", () => {
+      const port = proxyServer.address().port;
+      connectRelay();
+      const keepalive = setInterval(() => {
+        if (wsReady) relayWs.send(JSON.stringify({ type: "ping" }));
+      }, 25000);
+      resolve({
+        port,
+        url: `http://127.0.0.1:${port}`,
+        get connected() { return wsReady; },
+        get everConnected() { return everConnected; },
+        close: () => {
+          closed = true;
+          clearInterval(keepalive);
+          try { proxyServer.close(); } catch {}
+          if (relayWs) try { relayWs.close(); } catch {}
+          for (const [, socket] of tcpSockets) try { socket.destroy(); } catch {}
+          tcpSockets.clear();
+          pendingHttp.clear();
+          wsReady = false;
+          fireState();
+        },
+      });
+    });
+  });
+}
+
+async function ensureUniversalProxy(device) {
+  const key = device || "";
+  const existing = universalProxies.get(key);
+  if (existing) return existing;
+  const { server, token } = getRelayConfig();
+  const entry = {
+    device: device || "",
+    kind: "universal-http",
+    createdAt: Date.now(),
+    lastUsedAt: Date.now(),
+    connected: false,
+    everConnected: false,
+    proxy: null,
+  };
+  entry.proxy = await startUniversalHttpProxy({
+    server, token, device,
+    onStateChange: ({ connected, everConnected }) => {
+      entry.connected = connected;
+      entry.everConnected = everConnected;
+      broadcastProxies();
+    },
+  });
+  universalProxies.set(key, entry);
+  broadcastProxies();
+  return entry;
+}
 
 ipcMain.handle("proxy-list", () => snapshotProxies());
 ipcMain.handle("proxy-close", (_, { key }) => ({ ok: closeProxy(key) }));
@@ -689,10 +1152,24 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
   }
 });
 
-ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
+ipcMain.handle("open-browser", async (_, { device, port, path: urlPath, url }) => {
   const { BrowserWindow } = require("electron");
-  const remotePort = port || 3000;
-  const initialPath = urlPath || "/";
+  // Start / reuse the device's universal HTTP proxy
+  let universal;
+  try {
+    universal = await ensureUniversalProxy(device);
+  } catch (e) {
+    return { error: `proxy failed: ${e.message}` };
+  }
+  const proxyPort = universal.proxy.port;
+
+  // Initial URL. Prefer explicit `url`; otherwise reconstruct legacy style.
+  let initialUrl = url;
+  if (!initialUrl) {
+    const p = port ? parseInt(port, 10) : 3000;
+    const pathStr = urlPath || "/";
+    initialUrl = `http://localhost:${p}${pathStr}`;
+  }
 
   const win = new BrowserWindow({
     width: 1280, height: 820, minWidth: 800, minHeight: 600,
@@ -709,20 +1186,52 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath }) => {
     },
   });
 
+  // Route the window (and its <webview>) through our local proxy
+  try {
+    await win.webContents.session.setProxy({
+      proxyRules: `http=127.0.0.1:${proxyPort};https=127.0.0.1:${proxyPort}`,
+      proxyBypassRules: "<-loopback>", // do NOT bypass loopback; our proxy listens on 127.0.0.1
+    });
+  } catch (e) {
+    console.error("[browser] setProxy failed:", e.message);
+  }
+
   const cachedBrowser = path.join(UI_CACHE_DIR, "browser.html");
   const browserBase = fs.existsSync(cachedBrowser) ? `file://${cachedBrowser}` : CLOUD_URL + "browser.html";
   const fileUrl = new URL(browserBase);
   if (device) fileUrl.searchParams.set("device", device);
-  fileUrl.searchParams.set("port", String(remotePort));
-  fileUrl.searchParams.set("path", initialPath);
+  fileUrl.searchParams.set("url", initialUrl);
+  fileUrl.searchParams.set("proxyPort", String(proxyPort));
   win.loadURL(fileUrl.toString());
 
-  // Eagerly ensure proxy (so renderer sees connected state sooner)
-  ensureProxy({ device, remotePort, kind: "browser" }).catch(() => {});
-
-  // Proxy lives as long as the app, not the window.
   trackIndependentWindow(win);
-  return { ok: true };
+  return { ok: true, proxyPort };
+});
+
+ipcMain.handle("browser-get-proxy-port", async (_, { device }) => {
+  try {
+    const entry = await ensureUniversalProxy(device);
+    return { ok: true, port: entry.proxy.port, connected: entry.connected };
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
+// Set per-window HTTP proxy. Used by browser.html to apply proxy to its <webview>
+// session when the device changes mid-flight.
+ipcMain.handle("browser-set-proxy", async (evt, { port }) => {
+  const { BrowserWindow } = require("electron");
+  const win = BrowserWindow.fromWebContents(evt.sender);
+  if (!win) return { error: "no window" };
+  try {
+    await win.webContents.session.setProxy({
+      proxyRules: `http=127.0.0.1:${port};https=127.0.0.1:${port}`,
+      proxyBypassRules: "<-loopback>",
+    });
+    return { ok: true };
+  } catch (e) {
+    return { error: e.message };
+  }
 });
 
 // ── IPC: Clipboard ──

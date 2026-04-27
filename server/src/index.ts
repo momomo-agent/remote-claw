@@ -388,6 +388,28 @@ export class DeviceHub {
     }
 
     ws.addEventListener("message", (event) => {
+      // Binary frame: tunnel protocol. Forward by peer field (byte 5..5+peerLen).
+      // Frame: op(1) + reqId(4) + peerLen(1) + peer(peerLen) + payload(...)
+      const raw = event.data as any;
+      if (raw instanceof ArrayBuffer) {
+        const u8 = new Uint8Array(raw);
+        if (u8.length < 6) return;
+        const peerLen = u8[5];
+        if (u8.length < 6 + peerLen) return;
+        const peerBytes = u8.subarray(6, 6 + peerLen);
+        const targetId = new TextDecoder("utf-8").decode(peerBytes);
+        const target = this.devices.get(targetId) || this.clients?.get(targetId);
+        if (!target) return; // silently drop; initiator can time out
+        // Rewrite peer field with current sender's deviceId so the receiver knows who to reply to.
+        const fromBytes = new TextEncoder().encode(deviceId);
+        const out = new Uint8Array(6 + fromBytes.length + (u8.length - 6 - peerLen));
+        out[0] = u8[0]; out[1] = u8[1]; out[2] = u8[2]; out[3] = u8[3]; out[4] = u8[4];
+        out[5] = fromBytes.length;
+        out.set(fromBytes, 6);
+        out.set(u8.subarray(6 + peerLen), 6 + fromBytes.length);
+        target.ws.send(out.buffer as ArrayBuffer);
+        return;
+      }
       try {
         const msg = JSON.parse(event.data as string);
         if (msg.type === "result") {
