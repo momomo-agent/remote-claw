@@ -60,32 +60,83 @@ function connect() {
 
   let connectedAt = 0;
   let lastPongAt = 0;
+  let pingSentAt = 0;
+  let pingSeq = 0;
+  let pingsSinceLastPong = 0;
+  // Event-loop liveness probe — if the interval drifts more than 3s we
+  // know the main thread was blocked. Uses clean setInterval 5s baseline.
+  if (!global.__elLoopLast) {
+    global.__elLoopLast = Date.now();
+    setInterval(() => {
+      const now = Date.now();
+      const drift = now - global.__elLoopLast - 5000;
+      if (drift > 3000) console.log(`[eventloop] drift=${drift}ms (main thread blocked)`);
+      global.__elLoopLast = now;
+    }, 5000);
+  }
   ws.on("open", () => {
     connectedAt = Date.now();
     lastPongAt = Date.now();
     console.log(`Connected at ${new Date(connectedAt).toISOString()}`);
     reconnectDelay = 1000;
-    // Keep-alive. CF idle timeout ~30s but half-open sockets can linger for minutes:
-    // node's ws does NOT fire 'close' automatically on silent-dead peers. So we
-    // actively terminate if no pong returns within 45s.
+    // Keep-alive. Use WebSocket protocol-level ping/pong (ws.ping() sends
+    // an RFC 6455 control frame) instead of app-level {type:"ping"} JSON.
+    // Control frames are handled by Cloudflare's edge without waking the
+    // Durable Object, so RTT stays low even when the DO is busy, hibernated,
+    // or being rescheduled. App-level ping RTT was observed as 13-14s in
+    // production — caused by CF routing those through the DO's message
+    // handler instead of auto-responding. Control-frame ping is answered
+    // by the WS peer stack directly.
     const PING_MS = 15000;
     const PONG_TIMEOUT_MS = 45000;
+    pingSentAt = 0; pingSeq = 0; pingsSinceLastPong = 0;
+    // Track each ping's send time so we get per-pong RTT.
+    const pingLog = []; // [[seq, sentAt], ...], kept <= 20 entries
     const sendPing = () => {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+      if (ws.readyState === ws.OPEN) {
+        pingSentAt = Date.now();
+        pingSeq++;
+        pingLog.push([pingSeq, pingSentAt]);
+        while (pingLog.length > 20) pingLog.shift();
+        try { ws.ping(Buffer.from(String(pingSeq))); } catch {}
+      }
     };
     sendPing();
     const pingInterval = setInterval(() => {
       if (ws.readyState !== ws.OPEN) { clearInterval(pingInterval); return; }
       const sincePong = Date.now() - lastPongAt;
+      const sincePing = Date.now() - pingSentAt;
+      if (pingsSinceLastPong >= 1 && sincePong > 20000) {
+        const bufAmount = ws.bufferedAmount || 0;
+        console.log(`[ping] seq=${pingSeq} gap=${(sincePong/1000).toFixed(1)}s sinceSend=${(sincePing/1000).toFixed(1)}s pingsSincePong=${pingsSinceLastPong} bufferedAmount=${bufAmount} rs=${ws.readyState}`);
+      }
       if (sincePong > PONG_TIMEOUT_MS) {
-        console.log(`No pong for ${(sincePong/1000).toFixed(1)}s — forcing reconnect (ws.terminate)`);
+        console.log(`No pong for ${(sincePong/1000).toFixed(1)}s — forcing reconnect (ws.terminate) pingsSincePong=${pingsSinceLastPong}`);
         try { ws.terminate(); } catch {}
         clearInterval(pingInterval);
         return;
       }
+      pingsSinceLastPong++;
       sendPing();
     }, PING_MS);
-    ws.on("close", () => clearInterval(pingInterval));
+    // Record pongs from the ws library's 'pong' event (WS protocol frame).
+    const onPong = (data) => {
+      const seq = parseInt(Buffer.isBuffer(data) ? data.toString() : String(data || ''), 10);
+      const now = Date.now();
+      let rtt = -1;
+      if (!Number.isNaN(seq)) {
+        const idx = pingLog.findIndex((e) => e[0] === seq);
+        if (idx !== -1) { rtt = now - pingLog[idx][1]; pingLog.splice(idx, 1); }
+      }
+      if (rtt > 3000) console.log(`[pong] slow rtt=${rtt}ms seq=${seq}`);
+      lastPongAt = now;
+      pingsSinceLastPong = 0;
+    };
+    ws.on("pong", onPong);
+    ws.on("close", () => {
+      clearInterval(pingInterval);
+      ws.off("pong", onPong);
+    });
   });
 
   ws.on("message", (data, isBinary) => {
@@ -103,7 +154,12 @@ function connect() {
       const msg = JSON.parse(data.toString());
       if (msg.type !== "pong") console.log(`[ws] recv: ${msg.type}${msg.sessionId ? ' sid=' + msg.sessionId : ''}`);
       if (msg.type === "exec") execCommand(msg.taskId, msg.command);
-      if (msg.type === "pong") { lastPongAt = Date.now(); }
+      if (msg.type === "pong") {
+        const rtt = pingSentAt ? Date.now() - pingSentAt : -1;
+        if (rtt > 3000) console.log(`[pong] slow rtt=${rtt}ms`);
+        lastPongAt = Date.now();
+        pingsSinceLastPong = 0;
+      }
       // File transfer via WS relay
       if (msg.type === "file-start") handleIncomingFileStart(msg);
       if (msg.type === "file-chunk") handleIncomingFileChunk(msg);
