@@ -294,10 +294,20 @@
     }
   });
 
-  // Init
+  // Init — wait until window/webview setProxy has taken effect before
+  // loading the initial URL. Otherwise the webview can fire its first
+  // request before Electron wires in our local proxy, and the page falls
+  // back to chrome-error://.
   urlInput.value = initialUrl;
   updateLock(initialUrl);
-  wv.src = initialUrl;
+  (async () => {
+    // A single IPC round-trip guarantees main-process has completed at
+    // least one event-loop tick past did-attach-webview + setProxy.
+    try { await window.electronAPI.invoke('browser-get-proxy-port', { device }); } catch {}
+    // Extra micro-wait in case the webview element isn't fully ready yet.
+    await new Promise((r) => setTimeout(r, 50));
+    wv.src = initialUrl;
+  })();
   refreshStatus();
   setInterval(refreshStatus, 3000);
 </script>
