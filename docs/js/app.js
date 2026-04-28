@@ -36,6 +36,12 @@ const App = defineComponent({
         api.invoke('open-browser', { device: state.selectedDevice, port: 3000, path: '/' })
         return
       }
+      // System Chrome via proxy tunnel. about:blank lands you in a fresh
+      // Chrome instance (separate profile so --proxy-server actually takes).
+      if (appId === 'chrome') {
+        api.invoke('open-system-chrome', { device: state.selectedDevice, url: 'about:blank' })
+        return
+      }
 
       // Everything else opens in a new window
       api.invoke('open-tab-window', {

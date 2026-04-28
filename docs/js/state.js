@@ -12,6 +12,10 @@ export const ALL_APPS = [
   { id: 'files',    label: 'Files',    icon: '📁', canDetach: true,  needsDevice: true },
   { id: 'vscode',   label: 'VS Code',  icon: '💻', canDetach: 'only', needsDevice: true },
   { id: 'browser',  label: 'Browser',  icon: '🌐', canDetach: 'only', needsDevice: true },
+  // 'chrome' launches the user's real system Chrome pointed at the remote
+  // via our HTTP proxy tunnel. Different from 'browser' (which is an
+  // Electron BrowserWindow we fully control). Chrome UX, remote traffic.
+  { id: 'chrome',   label: 'Chrome',   icon: '🚛', canDetach: 'only', needsDevice: true },
   { id: 'network',  label: 'Network',  icon: '📡', canDetach: true,  needsDevice: true },
   { id: 'claw',     label: 'Claw',     icon: '🦞', canDetach: true,  needsDevice: true },
   { id: 'screen',   label: 'Screen',   icon: '🖥', canDetach: true,  needsDevice: true },

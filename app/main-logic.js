@@ -1410,6 +1410,64 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath, url }) =
   return { ok: true, proxyPort };
 });
 
+// Open the user's real system Chrome pointed at a remote device via our
+// HTTP proxy tunnel. Useful when you want Chrome's native UX (DevTools,
+// extensions you actually have in a separate profile, keyboard shortcuts)
+// while still routing traffic through the relay to the target host.
+//
+// Why a dedicated --user-data-dir:
+//   Chrome's proxy is process-wide and locked in at launch. If Chrome is
+//   already running with the default profile, a new `open -a Chrome` call
+//   with --proxy-server attaches to the existing process and the flag is
+//   silently ignored. A disposable profile directory forces a brand-new
+//   Chrome process which honors the flag.
+//
+// The profile dir is namespaced by device so mac-mini and MacBook-Pro get
+// independent Chrome instances and don't clobber each other's state.
+ipcMain.handle("open-system-chrome", async (_, { device, url }) => {
+  const target = url || "about:blank";
+  const directLocal = isLocalDevice(device);
+
+  const args = [];
+  let proxyPort = null;
+
+  if (!directLocal) {
+    let universal;
+    try {
+      universal = await ensureUniversalProxy(device);
+    } catch (e) {
+      return { error: `proxy failed: ${e.message}` };
+    }
+    proxyPort = universal.proxy.port;
+    args.push(`--proxy-server=http://127.0.0.1:${proxyPort}`);
+    // Loopback is NOT bypassed because our proxy lives on 127.0.0.1 and
+    // every request must reach it. Matches open-browser's proxyBypassRules.
+    args.push("--proxy-bypass-list=<-loopback>");
+  }
+
+  // Separate profile per device. /tmp survives until reboot which is plenty,
+  // and avoids corrupting whatever Chrome profile the user is logged into.
+  const profileKey = directLocal ? "local" : (device || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const profileDir = path.join(os.tmpdir(), `rc-chrome-${profileKey}`);
+  try { fs.mkdirSync(profileDir, { recursive: true }); } catch {}
+  args.push(`--user-data-dir=${profileDir}`);
+  args.push("--no-first-run", "--no-default-browser-check");
+  args.push(target);
+
+  // `open -na "Google Chrome" --args ...` asks LaunchServices to spawn a
+  // fresh Chrome instance even if one is already running. Without -n the OS
+  // would attach the URL to an existing Chrome and drop our --proxy-server.
+  try {
+    const { spawn } = require("child_process");
+    const proc = spawn("open", ["-na", "Google Chrome", "--args", ...args], { detached: true, stdio: "ignore" });
+    proc.unref();
+    console.log(`[chrome] launched for ${device || "local"} proxy=${proxyPort || "none"}`);
+    return { ok: true, proxyPort, profileDir };
+  } catch (e) {
+    return { error: `launch failed: ${e.message}` };
+  }
+});
+
 ipcMain.handle("browser-get-proxy-port", async (_, { device }) => {
   try {
     const entry = await ensureUniversalProxy(device);
