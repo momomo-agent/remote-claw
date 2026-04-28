@@ -97,20 +97,34 @@ async function loadLogic() {
     writeMeta({ lastCrash: new Date().toISOString(), bootedOk: false });
   }
 
-  // Step 2: Try promote staging → cached (if staging exists and cached is different)
+  // Step 2: Try promote staging → cached.
+  //
+  // Guard: only promote if cached was untouched since we wrote the staging
+  // file. `stagingPrevCachedHash` is recorded in meta when Step 6 stages a
+  // new version. If someone (a manual `scp`, a `self-update`, an rsync)
+  // overwrote cached to something newer than what we had at stage time,
+  // promoting would silently clobber that work. In that case we drop the
+  // staging file — the next bg fetch will stage again if there's still an
+  // update to apply.
   if (fs.existsSync(STAGING_LOGIC) && !lastBootCrashed) {
     try {
       const staging = fs.readFileSync(STAGING_LOGIC, "utf-8");
-      if (isValidLogic(staging)) {
+      const meta = readMeta();
+      if (!isValidLogic(staging)) {
+        console.log("[bootstrap] Staging invalid, discarding");
+      } else {
         const stagingHash = sha256(staging);
-        const meta = readMeta();
-        if (stagingHash !== meta.cachedHash) {
+        const cachedUntouched = !meta.stagingPrevCachedHash ||
+          meta.stagingPrevCachedHash === meta.cachedHash;
+        if (!cachedUntouched) {
+          console.log("[bootstrap] Cached changed since staging, discarding staging (manual override wins)");
+        } else if (stagingHash === meta.cachedHash) {
+          // No-op promote; not worth writing cached again.
+        } else {
           fs.writeFileSync(CACHED_LOGIC, staging);
-          writeMeta({ cachedHash: stagingHash, promotedAt: new Date().toISOString() });
+          writeMeta({ cachedHash: stagingHash, promotedAt: new Date().toISOString(), stagingPrevCachedHash: null });
           console.log("[bootstrap] Promoted staging → cached");
         }
-      } else {
-        console.log("[bootstrap] Staging invalid, discarding");
       }
       fs.unlinkSync(STAGING_LOGIC);
     } catch (e) {
@@ -163,14 +177,22 @@ async function loadLogic() {
     writeMeta({ bootedOk: true, lastBoot: new Date().toISOString(), loadedFrom: logicPath });
     console.log("[bootstrap] Boot OK, lock cleared");
 
-    // Step 6: Background fetch — stage for next restart
+    // Step 6: Background fetch — stage for next restart.
+    // We record `stagingPrevCachedHash` so the next boot's Step 2 can tell
+    // whether cached was tampered with between stage time and promote time
+    // (e.g. a manual scp of a newer main-logic.js). If so, promote backs off.
     fetchLatest().then(code => {
       if (!code) return;
       const hash = sha256(code);
       const meta = readMeta();
       if (hash !== meta.cachedHash) {
         fs.writeFileSync(STAGING_LOGIC, code);
-        writeMeta({ stagedHash: hash, stagedAt: new Date().toISOString(), stagedSize: code.length });
+        writeMeta({
+          stagedHash: hash,
+          stagedAt: new Date().toISOString(),
+          stagedSize: code.length,
+          stagingPrevCachedHash: meta.cachedHash || null,
+        });
         console.log(`[bootstrap] Staged update (${code.length} bytes) — will apply on next restart`);
       }
     }).catch(() => {});
