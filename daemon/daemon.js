@@ -809,6 +809,14 @@ function handleTunnelTcpClose(reqId, peer, payload) {
 }
 
 // ── Binary WebSocket (code-server internal WS) ──
+//
+// Session record: { ws, buffer: [ [dataBytes, binary] ] } — the buffer is
+// populated when WS_DATA arrives before the local WebSocket reaches OPEN
+// (common: the tunnel delivers the first client frame within ~10ms of
+// WS_OPEN, but node-ws needs the TCP handshake + HTTP upgrade to complete).
+// Previously those frames were dropped on the floor and code-server's
+// bootstrap handshake would time out with "The workbench failed to connect
+// to the server (Error: Time limit reached)".
 function handleTunnelWsOpen(reqId, peer, payload) {
   let hdr;
   try { hdr = JSON.parse(Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength).toString("utf-8") || "{}"); }
@@ -822,7 +830,15 @@ function handleTunnelWsOpen(reqId, peer, payload) {
     headers[k] = v;
   }
   const localWs = new WebSocket(wsUrl, { headers });
-  tunnelWsSessions.set(reqId, localWs);
+  const session = { ws: localWs, buffer: [] };
+  tunnelWsSessions.set(reqId, session);
+  localWs.on("open", () => {
+    // Flush anything the client sent while we were connecting.
+    for (const [data, binary] of session.buffer) {
+      try { localWs.send(data, { binary }); } catch (e) { console.error(`[tunnel-ws] ${reqId} flush: ${e.message}`); }
+    }
+    session.buffer.length = 0;
+  });
   localWs.on("message", (data, isBin) => {
     const flags = isBin ? 0x01 : 0x00;
     const dataBuf = Buffer.isBuffer(data) ? data : Buffer.from(data);
@@ -839,21 +855,33 @@ function handleTunnelWsOpen(reqId, peer, payload) {
   });
   localWs.on("error", (e) => {
     console.error(`[tunnel-ws] ${reqId}: ${e.message}`);
+    // Notify peer so code-server-proxy can surface the failure instead of
+    // letting the client hang for the full handshake timeout.
+    tunnelWsSessions.delete(reqId);
+    sendFrame(tunnel.OP.WS_CLOSE, reqId, peer, Buffer.from(`upstream error: ${e.message}`));
   });
 }
 
 function handleTunnelWsData(reqId, peer, payload) {
-  const localWs = tunnelWsSessions.get(reqId);
-  if (!localWs || localWs.readyState !== WebSocket.OPEN) return;
+  const session = tunnelWsSessions.get(reqId);
+  if (!session) return;
   const flags = payload[0] || 0;
   const dataBytes = Buffer.from(payload.buffer, payload.byteOffset + 1, payload.byteLength - 1);
-  localWs.send(dataBytes, { binary: !!(flags & 0x01) });
+  const binary = !!(flags & 0x01);
+  // Queue if not yet OPEN — ws lib queues writes during CONNECTING without
+  // acking them back, so doing it here guarantees ordering and lets us bail
+  // cleanly if the upstream connect fails.
+  if (session.ws.readyState !== WebSocket.OPEN) {
+    session.buffer.push([dataBytes, binary]);
+    return;
+  }
+  session.ws.send(dataBytes, { binary });
 }
 
 function handleTunnelWsClose(reqId, peer, payload) {
-  const localWs = tunnelWsSessions.get(reqId);
-  if (localWs) {
-    try { localWs.close(); } catch {}
+  const session = tunnelWsSessions.get(reqId);
+  if (session) {
+    try { session.ws.close(); } catch {}
     tunnelWsSessions.delete(reqId);
   }
 }

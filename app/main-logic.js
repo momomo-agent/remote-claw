@@ -450,6 +450,140 @@ ipcMain.handle("shell-close", (_, p) => wsSend({ type: "shell-close", sessionId:
 ipcMain.handle("screen-start", (_, p) => wsSend({ type: "screen-start", sessionId: p.sessionId, to: p.device, quality: p.quality || 60, fps: p.fps || 2 }));
 ipcMain.handle("screen-stop", (_, p) => wsSend({ type: "screen-stop", sessionId: p.sessionId, to: p.device }));
 
+// ── Local screen capture (bypasses relay) ─────────────────────────────────
+// The relay WS tunnel is currently 7-15s RTT, which makes a 2fps screen
+// stream visibly broken (frames back up, input latency is unusable).
+// When the target device is this machine we can skip the relay entirely
+// and capture+input via local tooling.
+//
+// Capture: screencapture -x -t jpg, then sips resize to max 1280 wide.
+// Returns { ok, data: base64, width, height, ts } per frame — the UI polls
+// screen-capture-local at the requested fps.
+//
+// Input: cliclick for click/move/keystroke, fall back to AppleScript.
+const SCREEN_TMP_LOCAL = path.join(os.tmpdir(), "remoteclaw-screen-local.jpg");
+let _screenCaptureInFlight = false;
+
+ipcMain.handle("screen-capture-local", async (_, { quality = 60, maxWidth = 1280 } = {}) => {
+  if (_screenCaptureInFlight) return { skipped: true };
+  _screenCaptureInFlight = true;
+  try {
+    // screencapture is synchronous-friendly; use it as a child_process and
+    // await close. execSync is fine — target time per frame is <200ms.
+    await new Promise((resolve, reject) => {
+      const proc = spawn("screencapture", ["-x", "-t", "jpg", SCREEN_TMP_LOCAL], {
+        env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
+      });
+      proc.on("close", (code) => code === 0 ? resolve() : reject(new Error("screencapture exit " + code)));
+      proc.on("error", reject);
+    });
+    if (!fs.existsSync(SCREEN_TMP_LOCAL)) return { error: "capture produced no file" };
+    const st = fs.statSync(SCREEN_TMP_LOCAL);
+    if (st.size < 100) {
+      // Empty file — usually means Screen Recording permission missing.
+      try { fs.unlinkSync(SCREEN_TMP_LOCAL); } catch {}
+      return { error: "empty capture (grant Screen Recording permission in System Settings > Privacy)" };
+    }
+    // Resize via sips (built-in). Keep aspect ratio via --resampleWidth alone.
+    let width = null, height = null;
+    try {
+      const info = execSync(`sips -g pixelWidth -g pixelHeight "${SCREEN_TMP_LOCAL}"`, { encoding: "utf-8" });
+      const wm = info.match(/pixelWidth:\s*(\d+)/); const hm = info.match(/pixelHeight:\s*(\d+)/);
+      if (wm) width = parseInt(wm[1]); if (hm) height = parseInt(hm[1]);
+      if (width && width > maxWidth) {
+        execSync(`sips --resampleWidth ${maxWidth} -s formatOptions ${quality} "${SCREEN_TMP_LOCAL}" --out "${SCREEN_TMP_LOCAL}"`, { stdio: "pipe" });
+        const info2 = execSync(`sips -g pixelWidth -g pixelHeight "${SCREEN_TMP_LOCAL}"`, { encoding: "utf-8" });
+        const wm2 = info2.match(/pixelWidth:\s*(\d+)/); const hm2 = info2.match(/pixelHeight:\s*(\d+)/);
+        if (wm2) width = parseInt(wm2[1]); if (hm2) height = parseInt(hm2[1]);
+      } else {
+        execSync(`sips -s formatOptions ${quality} "${SCREEN_TMP_LOCAL}" --out "${SCREEN_TMP_LOCAL}"`, { stdio: "pipe" });
+      }
+    } catch (e) {
+      // Resize is best-effort; keep whatever we have.
+    }
+    const buf = fs.readFileSync(SCREEN_TMP_LOCAL);
+    return {
+      ok: true,
+      data: buf.toString("base64"),
+      width, height,
+      bytes: buf.length,
+      ts: Date.now(),
+    };
+  } catch (e) {
+    return { error: e.message };
+  } finally {
+    _screenCaptureInFlight = false;
+  }
+});
+
+// Run a short-lived command with a hard timeout. We never use execSync here
+// because the parent is Electron's main process — blocking it would freeze
+// the whole UI. cliclick in particular will hang forever if the host app
+// lacks Accessibility permission (it sits in a TCC prompt we can't see).
+function runShort(cmd, args, { timeoutMs = 2000 } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    let out = "", err = "";
+    const proc = spawn(cmd, args, { env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` } });
+    const timer = setTimeout(() => {
+      if (!done) { done = true; try { proc.kill("SIGKILL"); } catch {} resolve({ code: -1, timedOut: true, out, err }); }
+    }, timeoutMs);
+    proc.stdout.on("data", (d) => { out += d.toString(); });
+    proc.stderr.on("data", (d) => { err += d.toString(); });
+    proc.on("close", (code) => { if (!done) { done = true; clearTimeout(timer); resolve({ code, out, err }); } });
+    proc.on("error", (e) => { if (!done) { done = true; clearTimeout(timer); resolve({ code: -1, err: e.message }); } });
+  });
+}
+
+async function detectScreenSize() {
+  if (global.__rcScreenSize) return global.__rcScreenSize;
+  // cliclick uses the *logical* (scaled) coordinate system, not the raw
+  // pixel backing. Electron's screen.getPrimaryDisplay().size is exactly
+  // that — use it so clicks land where the user sees the cursor.
+  try {
+    const { screen } = require("electron");
+    const d = screen.getPrimaryDisplay();
+    global.__rcScreenSize = { w: d.size.width, h: d.size.height, scale: d.scaleFactor || 1 };
+  } catch {
+    global.__rcScreenSize = { w: 1920, h: 1080, scale: 1 };
+  }
+  return global.__rcScreenSize;
+}
+
+// Remote input for the local machine. The UI translates canvas-relative
+// normalized coords (0..1) to absolute pixel coords server-side using the
+// real display resolution so the UI can stay dimension-agnostic.
+//
+// Requirements: cliclick (brew install cliclick) + Accessibility permission
+// for the RemoteClaw app (System Settings > Privacy & Security > Accessibility).
+ipcMain.handle("screen-input-local", async (_, input) => {
+  // input: { type: 'click'|'dblclick'|'rightclick'|'move'|'keystroke'|'scroll', nx?, ny?, text?, key?, dx?, dy? }
+  try {
+    const { w, h } = await detectScreenSize();
+    const px = input.nx != null ? Math.round(input.nx * w) : null;
+    const py = input.ny != null ? Math.round(input.ny * h) : null;
+    if (input.type === "click" || input.type === "dblclick" || input.type === "rightclick" || input.type === "move") {
+      if (px == null || py == null) return { error: "missing coords" };
+      const cmd = input.type === "dblclick" ? "dc" : input.type === "rightclick" ? "rc" : input.type === "move" ? "m" : "c";
+      const r = await runShort("cliclick", [`${cmd}:${px},${py}`], { timeoutMs: 2000 });
+      if (r.timedOut) return { error: "cliclick timed out — grant RemoteClaw Accessibility permission in System Settings" };
+      if (r.code !== 0) return { error: `cliclick failed: ${r.err || 'exit ' + r.code}` };
+      return { ok: true, px, py, type: input.type };
+    }
+    if (input.type === "keystroke") {
+      if (input.text) {
+        const r = await runShort("cliclick", ["-w", "0", `t:${String(input.text)}`], { timeoutMs: 2000 });
+        if (r.timedOut) return { error: "cliclick timed out — grant Accessibility permission" };
+        if (r.code !== 0) return { error: `cliclick failed: ${r.err || 'exit ' + r.code}` };
+      }
+      return { ok: true, type: "keystroke", text: input.text };
+    }
+    return { error: `unsupported input type: ${input.type}` };
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
 // ── IPC: Window ──
 
 ipcMain.handle("get-pinned", () => ({ pinned: isPinned }));
@@ -1118,12 +1252,61 @@ ipcMain.handle("browser-start-proxy", async (_, { device, port }) => {
   }
 });
 
+// Resolve the device name the local daemon uses with the relay. Cached.
+let _localDeviceNameCache = null;
+function getLocalDeviceName() {
+  if (_localDeviceNameCache) return _localDeviceNameCache;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, "config.json"), "utf-8"));
+    if (cfg.deviceName) { _localDeviceNameCache = String(cfg.deviceName); return _localDeviceNameCache; }
+  } catch {}
+  try {
+    const info = execSync("system_profiler SPHardwareDataType 2>/dev/null", { encoding: "utf-8" });
+    const m = info.match(/Model Name:\s*(.+)/);
+    if (m) { _localDeviceNameCache = m[1].trim().toLowerCase().replace(/\s+/g, "-"); return _localDeviceNameCache; }
+  } catch {}
+  return null;
+}
+function isLocalDevice(device) {
+  if (!device) return true;
+  const local = getLocalDeviceName();
+  return !!local && String(device).toLowerCase() === local.toLowerCase();
+}
+
 ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
   const { BrowserWindow, Notification } = require("electron");
   const remotePort = port || 8080;
 
   try {
-    // Start code-server on remote device if not already running
+    // Fast path: this machine. The relay WS tunnel currently costs 7-15s per
+    // RTT (Vultr VPS + ClashX TUN), which blows through code-server's
+    // bootstrap handshake and produces:
+    //   "The workbench failed to connect to the server (Error: Time limit
+    //    reached)"
+    // 127.0.0.1 is sub-ms — skip the tunnel when the target is us.
+    if (isLocalDevice(device)) {
+      try {
+        const lsof = execSync(`lsof -iTCP:${remotePort} -sTCP:LISTEN -nP 2>/dev/null | awk 'NR>1 {print $2; exit}'`, { encoding: "utf-8" }).trim();
+        if (!lsof) {
+          spawn("code-server", ["--bind-addr", `127.0.0.1:${remotePort}`, "--auth", "none"], { detached: true, stdio: "ignore" }).unref();
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      } catch {}
+      const directUrl = `http://127.0.0.1:${remotePort}` + (folder ? `/?folder=${encodeURIComponent(folder)}` : "");
+      const win = new BrowserWindow({
+        width: 1280, height: 800, minWidth: 800, minHeight: 600,
+        title: "VS Code \u2014 " + (device || "local"),
+        backgroundColor: '#161618',
+        titleBarStyle: "hiddenInset",
+        trafficLightPosition: { x: 12, y: 12 },
+        webPreferences: { nodeIntegration: false, contextIsolation: true, webSecurity: false },
+      });
+      win.loadURL(directUrl);
+      trackIndependentWindow(win);
+      return { ok: true, strategy: "direct", url: directUrl };
+    }
+
+    // Remote device path: tunnel through the relay.
     if (device) {
       const execOpts = { method: "POST", headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" } };
       const checkRes = await (await fetch(`${httpBase}/exec`, { ...execOpts, body: JSON.stringify({ device, command: `lsof -i :${remotePort} -t 2>/dev/null | head -1`, oneshot: true, timeout: 5000 }) })).json();
@@ -1147,7 +1330,7 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
     win.loadURL(codeUrl);
     // NOTE: proxy is app-scoped now — do not close on window close
     trackIndependentWindow(win);
-    return { ok: true };
+    return { ok: true, strategy: "relay", url: codeUrl };
   } catch (e) {
     new Notification({ title: "VS Code", body: `Failed: ${e.message}` }).show();
     return { error: e.message };
@@ -1156,14 +1339,21 @@ ipcMain.handle("open-code-server", async (_, { device, folder, port }) => {
 
 ipcMain.handle("open-browser", async (_, { device, port, path: urlPath, url }) => {
   const { BrowserWindow } = require("electron");
-  // Start / reuse the device's universal HTTP proxy
-  let universal;
-  try {
-    universal = await ensureUniversalProxy(device);
-  } catch (e) {
-    return { error: `proxy failed: ${e.message}` };
+  // Fast path: this machine. Skip the relay universal proxy and let the
+  // window talk straight to 127.0.0.1. Same motivation as open-code-server —
+  // the relay WS tunnel is currently 7-15s RTT and WebSocket upgrades (live
+  // reload, HMR, etc.) time out.
+  const directLocal = isLocalDevice(device);
+  let proxyPort = null;
+  if (!directLocal) {
+    let universal;
+    try {
+      universal = await ensureUniversalProxy(device);
+    } catch (e) {
+      return { error: `proxy failed: ${e.message}` };
+    }
+    proxyPort = universal.proxy.port;
   }
-  const proxyPort = universal.proxy.port;
 
   // Initial URL. Prefer explicit `url`; otherwise reconstruct legacy style.
   let initialUrl = url;
@@ -1192,22 +1382,25 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath, url }) =
   // independent session by default, so we must also set proxy on the webview's
   // session when it attaches (via did-attach-webview). proxyBypassRules is
   // empty string — we do NOT bypass loopback because our proxy lives on 127.0.0.1.
-  const proxyConfig = {
-    proxyRules: `http=127.0.0.1:${proxyPort};https=127.0.0.1:${proxyPort}`,
-    proxyBypassRules: "<-loopback>",
-  };
-  try { await win.webContents.session.setProxy(proxyConfig); }
-  catch (e) { console.error("[browser] window setProxy failed:", e.message); }
+  // For local-device targets, skip setProxy entirely so the window hits the
+  // public network directly (for external URLs) or 127.0.0.1 (for dev servers).
+  if (!directLocal) {
+    const proxyConfig = {
+      proxyRules: `http=127.0.0.1:${proxyPort};https=127.0.0.1:${proxyPort}`,
+      proxyBypassRules: "<-loopback>",
+    };
+    try { await win.webContents.session.setProxy(proxyConfig); }
+    catch (e) { console.error("[browser] window setProxy failed:", e.message); }
 
-  // Configure webview session as soon as it attaches
-  win.webContents.on("did-attach-webview", (_e, wvContents) => {
-    try {
-      wvContents.session.setProxy(proxyConfig).catch(err =>
-        console.error("[browser] webview setProxy failed:", err.message));
-    } catch (e) {
-      console.error("[browser] did-attach-webview handler:", e.message);
-    }
-  });
+    win.webContents.on("did-attach-webview", (_e, wvContents) => {
+      try {
+        wvContents.session.setProxy(proxyConfig).catch(err =>
+          console.error("[browser] webview setProxy failed:", err.message));
+      } catch (e) {
+        console.error("[browser] did-attach-webview handler:", e.message);
+      }
+    });
+  }
 
   const cachedBrowser = path.join(UI_CACHE_DIR, "browser.html");
   const browserBase = fs.existsSync(cachedBrowser) ? `file://${cachedBrowser}` : CLOUD_URL + "browser.html";
