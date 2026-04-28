@@ -1,25 +1,27 @@
 #!/usr/bin/env node
 // rclaw — RemoteClaw CLI
 
-const http = require("http");
+const https = require("https");
 
 const SERVER = "https://relay.momomo.dev";
 const TOKEN = "rclaw-4847bbe08bda2c785f4e4e6bc05e4815";
-const PROXY_HOST = "127.0.0.1";
-const PROXY_PORT = 7890;
 const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB per chunk
 
 function api(method, path, body) {
   return new Promise((resolve, reject) => {
-    const url = `${SERVER}${path}`;
-    const headers = { Host: new URL(SERVER).hostname, Authorization: `Bearer ${TOKEN}` };
+    const url = new URL(path, SERVER);
+    const headers = { Authorization: `Bearer ${TOKEN}` };
     if (body) { headers["Content-Type"] = "application/json"; }
     const data = body ? JSON.stringify(body) : null;
     if (data) headers["Content-Length"] = Buffer.byteLength(data);
 
-    const req = http.request({
-      hostname: PROXY_HOST, port: PROXY_PORT, method,
-      path: url, headers, timeout: 60000,
+    const req = https.request({
+      hostname: url.hostname,
+      port: url.port || 443,
+      path: url.pathname + url.search,
+      method,
+      headers,
+      timeout: 60000,
     }, (res) => {
       let d = "";
       res.on("data", (c) => d += c);
