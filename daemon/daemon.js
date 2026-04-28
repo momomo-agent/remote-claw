@@ -225,7 +225,7 @@ function execCommand(taskId, command) {
       HOME: os.homedir(),
       PATH: `${os.homedir()}/.nvm/versions/node/current/bin:${os.homedir()}/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}`,
     },
-    timeout: 60000,
+    timeout: 600000, // 10 min — xcodebuild, large file ops, etc. can take a while
   });
 
   let stdout = "";

@@ -35,17 +35,17 @@ export function useTerminal() {
       const duration = Date.now() - startTime
       if (result.error) {
         lines.value.push({ type: 'error', text: result.error })
-        pushHistory({ command: cmd, device: state.selectedDevice, status: 'error', duration, createdAt: startTime })
+        pushHistory({ command: cmd, device: state.selectedDevice, from: state.localDevice, status: 'error', duration, createdAt: startTime })
       } else {
         if (result.stdout) lines.value.push({ type: 'stdout', text: result.stdout.replace(/\n$/, '') })
         if (result.stderr) lines.value.push({ type: 'stderr', text: result.stderr.replace(/\n$/, '') })
         const dur = result.completedAt && result.createdAt ? ((result.completedAt - result.createdAt) / 1000).toFixed(1) + 's' : ''
         lines.value.push({ type: 'info', text: `exit ${result.exitCode}${dur ? ' \u00b7 ' + dur : ''}` })
-        pushHistory({ command: cmd, device: state.selectedDevice, status: result.exitCode === 0 ? 'done' : 'error', duration, createdAt: startTime })
+        pushHistory({ command: cmd, device: state.selectedDevice, from: state.localDevice, status: result.exitCode === 0 ? 'done' : 'error', duration, createdAt: startTime })
       }
     } catch (e) {
       lines.value.push({ type: 'error', text: e.message })
-      pushHistory({ command: cmd, device: state.selectedDevice, status: 'error', duration: Date.now() - startTime, createdAt: startTime })
+      pushHistory({ command: cmd, device: state.selectedDevice, from: state.localDevice, status: 'error', duration: Date.now() - startTime, createdAt: startTime })
     }
 
     executing.value = false
