@@ -1383,7 +1383,7 @@ ipcMain.handle("open-browser", async (_, { device, port, path: urlPath, url }) =
   if (!directLocal) {
     const proxyConfig = {
       proxyRules: `http=127.0.0.1:${proxyPort};https=127.0.0.1:${proxyPort}`,
-      proxyBypassRules: "localhost:1-2999;localhost:4000-4999;localhost:6000-7999;localhost:9000-65535",
+      proxyBypassRules: "<-loopback>",
     };
     try { await win.webContents.session.setProxy(proxyConfig); }
     catch (e) { console.error("[browser] window setProxy failed:", e.message); }
@@ -1440,11 +1440,9 @@ ipcMain.handle("open-system-chrome", async (_, { device, url }) => {
     }
     proxyPort = universal.proxy.port;
     args.push(`--proxy-server=http://127.0.0.1:${proxyPort}`);
-    // Only proxy common dev ports (3000-3999, 5000-5999, 8000-8999).
-    // Other localhost ports (like VS Code's 8600) bypass the proxy and
-    // stay local. This prevents "ERR_ABORTED" errors when pages try to
-    // load local resources that don't exist on the remote device.
-    args.push("--proxy-bypass-list=localhost:1-2999;localhost:4000-4999;localhost:6000-7999;localhost:9000-65535");
+    // Loopback is NOT bypassed because our proxy lives on 127.0.0.1 and
+    // every request must reach it. Matches open-browser's proxyBypassRules.
+    args.push("--proxy-bypass-list=<-loopback>");
   }
 
   // Separate profile per device. /tmp survives until reboot which is plenty,
@@ -1488,7 +1486,7 @@ ipcMain.handle("browser-set-proxy", async (evt, { port }) => {
   try {
     await win.webContents.session.setProxy({
       proxyRules: `http=127.0.0.1:${port};https=127.0.0.1:${port}`,
-      proxyBypassRules: "localhost:1-2999;localhost:4000-4999;localhost:6000-7999;localhost:9000-65535",
+      proxyBypassRules: "<-loopback>",
     });
     return { ok: true };
   } catch (e) {
