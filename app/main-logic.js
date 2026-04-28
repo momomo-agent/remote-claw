@@ -164,18 +164,14 @@ function startDaemon() {
     }
   }
 
-  console.log("[daemon] Starting...");
-  const nodeCmd = process.versions.electron ? "node" : process.execPath;
-  const child = spawn(nodeCmd, [DAEMON_ENTRY], {
-    detached: true,
-    stdio: ["ignore", fs.openSync(path.join(CONFIG_DIR, "daemon.log"), "a"), fs.openSync(path.join(CONFIG_DIR, "daemon.log"), "a")],
-    env: { ...process.env, HOME: os.homedir(), PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
-  });
-  child.unref();
-  fs.writeFileSync(DAEMON_PID_FILE, String(child.pid));
-  console.log(`[daemon] Started (pid ${child.pid})`);
-
+  // Daemon lifecycle is owned by the LaunchAgent (RunAtLoad + KeepAlive).
+  // Previously we ALSO spawn()'d the daemon directly here, which produced
+  // two processes with the same deviceName fighting for the relay slot —
+  // each knocks the other offline, cycles every second. The LaunchAgent
+  // path alone is enough: installLaunchAgent() runs `launchctl load` which
+  // immediately starts the daemon. We let launchd own restart semantics.
   installLaunchAgent();
+  console.log("[daemon] Managed by LaunchAgent");
 }
 
 function installLaunchAgent() {
