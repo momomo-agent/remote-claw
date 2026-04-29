@@ -51,6 +51,13 @@ let ws = null;
 let reconnectDelay = 1000;
 const MAX_DELAY = 30000;
 
+// Write PID file so the app can detect if daemon is running
+const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
+fs.writeFileSync(PID_FILE, String(process.pid));
+process.on("exit", () => { try { fs.unlinkSync(PID_FILE); } catch {} });
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));
+
 function connect() {
   const name = config.deviceName || getDeviceName();
   const url = `${config.server}/ws?device=${encodeURIComponent(name)}&token=${encodeURIComponent(config.token)}`;

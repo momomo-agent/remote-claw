@@ -175,7 +175,14 @@ function startDaemon() {
 }
 
 function installLaunchAgent() {
-  const nodePath = "/opt/homebrew/bin/node";
+  // Detect node path dynamically — /opt/homebrew on Apple Silicon, /usr/local on Intel/volta
+  const nodePath = (() => {
+    try { return execSync("which node", { encoding: "utf-8" }).trim(); } catch {}
+    for (const p of ["/opt/homebrew/bin/node", "/usr/local/bin/node"]) {
+      if (fs.existsSync(p)) return p;
+    }
+    return "node";
+  })();
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
