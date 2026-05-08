@@ -33,13 +33,13 @@ const App = defineComponent({
         return
       }
       if (appId === 'browser') {
-        api.invoke('open-browser', { device: state.selectedDevice, port: 3000, path: '/' })
+        api.invoke('open-browser', { device: state.selectedDevice, url: 'https://www.google.com/' })
         return
       }
-      // System Chrome via proxy tunnel. about:blank lands you in a fresh
-      // Chrome instance (separate profile so --proxy-server actually takes).
+      // System Chrome via proxy tunnel. Fresh Chrome instance (separate profile
+      // so --proxy-server actually takes).
       if (appId === 'chrome') {
-        api.invoke('open-system-chrome', { device: state.selectedDevice, url: 'about:blank' })
+        api.invoke('open-system-chrome', { device: state.selectedDevice, url: 'https://www.google.com/' })
         return
       }
 
